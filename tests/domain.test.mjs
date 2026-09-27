@@ -1,0 +1,11 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {preview,applyReport,validateReport} from '../domain.mjs';
+const base={id:'2026-0007',title:'코스모스',author:'칼 세이건',location:'B-01',qty:4,version:1};
+const db=()=>({catalogId:'catalog',revision:1,books:[structuredClone(base)],sessions:[{id:'session',books:[structuredClone(base)]}],applied:[],disposals:[]});
+const report=()=>({schema:'angela-survey/v1',catalogId:'catalog',sessionId:'session',entries:[{...base,qty:2,confirmed:true,disposals:[{qty:1,reason:'파손',at:'2026-09-27T00:00:00Z'}]},{id:'new-one',isNew:true,title:'신규',author:'저자',location:'A',qty:1,confirmed:true,disposals:[]}]});
+test('반영·번호의 최대값·폐기 기록·중복 반영 방지',()=>{const d=db(),r=report();assert.equal(preview(d,r).conflicts.length,0);const {next,mapping}=applyReport(d,r,{},1,2026);assert.equal(mapping[0].id,'2026-0008');assert.equal(next.books[0].qty,2);assert.equal(next.disposals.length,1);assert.equal(d.books[0].qty,4);assert.throws(()=>applyReport(next,r,{},next.revision,2026),/이미 반영/);});
+test('충돌 선택 필수·PC 유지·조사 반영',()=>{const d=db();d.books[0].qty=9;d.books[0].version++;assert.equal(preview(d,report()).conflicts.length,1);assert.throws(()=>applyReport(d,report(),{},1,2026),/모든 충돌/);const keep=applyReport(d,report(),{[base.id]:'pc'},1,2026).next;assert.equal(keep.books[0].qty,9);assert.equal(keep.disposals.length,0);assert.equal(applyReport(d,report(),{[base.id]:'survey'},1,2026).next.books[0].qty,2);});
+test('검사 이후 원장 변경 차단',()=>assert.throws(()=>applyReport(db(),report(),{},0,2026),/다시 실행/));
+test('잘못된 수량·중복 ID·외부 조사 차단',()=>{for(const qty of [-1,1.2,'2']){const r=report();r.entries[0].qty=qty;assert.throws(()=>validateReport(db(),r),/정수/);}const r=report();r.entries.push(r.entries[0]);assert.throws(()=>validateReport(db(),r),/중복/);r.entries.pop();r.catalogId='elsewhere';assert.throws(()=>validateReport(db(),r),/원장에서 생성/);});
+test('연도별 순번·발급 한도에서 원본 보존',()=>{const d=db();assert.equal(applyReport(d,report(),{},1,2027).mapping[0].id,'2027-0001');d.books.push({...base,id:'2026-9999'});assert.throws(()=>applyReport(d,report(),{},1,2026),/모두 사용/);assert.equal(d.books[0].qty,4);});
