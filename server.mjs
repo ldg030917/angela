@@ -5,7 +5,6 @@ import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview} from './inventory.mjs';
 import {readExcelUpload} from './excel-upload.mjs';
-import {makeExcel} from './xlsx-native.mjs';
 import {makeInventoryExcel} from './inventory-excel.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -15,7 +14,6 @@ let db;
 try {db=migrate(JSON.parse(await fs.readFile(dbPath,'utf8')));} catch(e){if(e.code!=='ENOENT')throw e;db=emptyDb();}
 async function save(next){await fs.writeFile(dbPath+'.tmp',JSON.stringify(next,null,2));await fs.rename(dbPath+'.tmp',dbPath);db=next;}
 const downloads=new Map();
-const sample=[{id:'2026-0001',title:'어린 왕자',author:'',location:'',qty:3},{id:'2026-0002',title:'데미안',author:'',location:'',qty:2},{id:'2026-0007',title:'코스모스',author:'',location:'',qty:4}];
 let queue=Promise.resolve();
 const server=http.createServer((req,res)=>{const work=()=>handle(req,res).catch(e=>{if(!res.headersSent)res.writeHead(400,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:e.message}));});queue=queue.then(work,work);});
 async function handle(req,res){
@@ -27,7 +25,6 @@ async function handle(req,res){
     if(p==='/api/lookup')return json(lookup(db,url.searchParams.get('q')||''));
     if(p.startsWith('/api/session/')){const s=db.sessions.find(x=>x.id===p.split('/').pop());if(!s)throw Error('조사를 찾을 수 없습니다.');return json(s);}
     if(p.startsWith('/api/download/')){const item=downloads.get(p.split('/').pop());if(!item||item.expires<Date.now())throw Error('다운로드가 만료되었습니다.');res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="${item.name}"`,'Cache-Control':'no-store'});return res.end(item.content);}
-    if(p==='/api/sample'){const location=path.join(data,'sample.xlsx');await makeExcel(sample,[],location);return file(location,'sample.xlsx');}
     if(p==='/api/android-app'){
       const apk=path.join(root,'dist','Angela-offline-android.apk');
       const content=await fs.readFile(apk);
@@ -38,7 +35,7 @@ async function handle(req,res){
       const location=path.join(data,'result.xlsx');
       await makeInventoryExcel(db,location);return file(location,'result.xlsx');
     }
-    if(p==='/normalize.mjs'){res.writeHead(200,{'Content-Type':'text/javascript'});return res.end(await fs.readFile(path.join(root,'normalize.mjs')));}
+    if(p==='/normalize.mjs'||p==='/physical-id.mjs'||p==='/status.mjs'){res.writeHead(200,{'Content-Type':'text/javascript'});return res.end(await fs.readFile(path.join(root,p.slice(1))));}
     const files={'/':'index.html','/mobile':'index.html','/app.js':'app.js','/style.css':'style.css'};
     if(files[p]){res.writeHead(200,{'Content-Type':p.endsWith('.js')?'text/javascript':p.endsWith('.css')?'text/css':'text/html; charset=utf-8','Cache-Control':'no-cache'});return res.end(await fs.readFile(path.join(root,'public',files[p])));}
     res.writeHead(404);return res.end('Not found');

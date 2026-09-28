@@ -1,3 +1,5 @@
+import {validatePhysicalId,normalizePhysicalId} from './physical-id.mjs';
+
 export const canonical = value => String(value ?? '').normalize('NFKC').replace(/\s+/gu, ' ').trim();
 export const searchKey = value => canonical(value).toLocaleLowerCase('ko-KR').replace(/[^\p{L}\p{N}]/gu, '');
 export const textFields = (kind, value) => ({
@@ -28,7 +30,7 @@ function distance(a, b) {
 export function rank(query, item) {
   const q=canonical(query), key=searchKey(q);
   if (!key) return 0;
-  if (item.physicalId && q.toUpperCase()===item.physicalId.toUpperCase()) return 100;
+  if (item.physicalId && validatePhysicalId(q) && normalizePhysicalId(q)===item.physicalId) return 100;
   if (item.legacyLedgerId && q.toUpperCase()===item.legacyLedgerId.toUpperCase()) return 95;
   const title=item.titleCanonical||canonical(item.titleRaw||item.title);
   const publisher=item.publisherCanonical||canonical(item.publisherRaw||item.publisher);

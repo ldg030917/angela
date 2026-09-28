@@ -1,6 +1,7 @@
 package kr.angela.inventory;
 
 import android.app.Activity;
+import android.content.ClipData;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -15,6 +16,8 @@ import java.io.ByteArrayOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.FileOutputStream;
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
@@ -24,6 +27,7 @@ public class MainActivity extends Activity {
     private WebView webView;
     private String pendingResult;
     private volatile byte[] pendingPackage;
+    private long exitPromptAt;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -49,7 +53,7 @@ public class MainActivity extends Activity {
                     pendingPackage = null;
                     return new WebResourceResponse("application/json", "UTF-8", new ByteArrayInputStream(content));
                 }
-                if (!name.equals("mobile.html") && !name.equals("app.js") && !name.equals("style.css") && !name.equals("normalize.mjs")) return null;
+                if (!name.equals("mobile.html") && !name.equals("app.js") && !name.equals("style.css") && !name.equals("normalize.mjs") && !name.equals("physical-id.mjs") && !name.equals("status.mjs")) return null;
                 try {
                     String type = name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript";
                     return new WebResourceResponse(type, "UTF-8", getAssets().open(name));
@@ -78,6 +82,22 @@ public class MainActivity extends Activity {
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
                     intent.putExtra(Intent.EXTRA_TITLE, filename.matches("[a-zA-Z0-9-]+\\.json") ? filename : "survey-result.json");
                     startActivityForResult(intent, SAVE_SURVEY);
+                } catch (Exception e) { message(e.getMessage()); }
+            });
+        }
+        @JavascriptInterface public void shareSurvey(String content) {
+            runOnUiThread(() -> {
+                try {
+                    if (!"angela-survey/v2".equals(new JSONObject(content).optString("schema"))) throw new Exception("조사 결과 형식이 올바르지 않습니다.");
+                    try (FileOutputStream output = new FileOutputStream(new File(getCacheDir(), SurveyShareProvider.FILE))) {
+                        output.write(content.getBytes(StandardCharsets.UTF_8));
+                    }
+                    Intent intent = new Intent(Intent.ACTION_SEND);
+                    intent.setType("application/json");
+                    intent.putExtra(Intent.EXTRA_STREAM, SurveyShareProvider.URI);
+                    intent.setClipData(ClipData.newUri(getContentResolver(), "Angela 조사 결과", SurveyShareProvider.URI));
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(Intent.createChooser(intent, "조사 결과 공유"));
                 } catch (Exception e) { message(e.getMessage()); }
             });
         }
@@ -112,6 +132,12 @@ public class MainActivity extends Activity {
 
     private void message(String text) { Toast.makeText(this, text, Toast.LENGTH_LONG).show(); }
     @Override public void onBackPressed() {
-        if (webView.canGoBack()) webView.goBack(); else super.onBackPressed();
+        webView.evaluateJavascript("window.angelaHandleBack && window.angelaHandleBack()", handled -> {
+            if ("true".equals(handled)) { exitPromptAt = 0; return; }
+            if (webView.canGoBack()) { webView.goBack(); exitPromptAt = 0; return; }
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (exitPromptAt > 0 && now - exitPromptAt <= 2000) finish();
+            else { exitPromptAt = now; message("한 번 더 뒤로가기를 누르면 종료됩니다."); }
+        });
     }
 }
