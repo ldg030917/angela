@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -13,6 +14,12 @@ namespace AngelaDesktop {
     private readonly NotifyIcon tray;
     private readonly string url;
     private readonly string root;
+    private Process browser;
+    private IntPtr browserWindow;
+    private bool browserWindowSeen;
+    private System.Windows.Forms.Timer browserTimer;
+
+    [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr window);
 
     public Launcher(bool smoke) {
       string executableDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -40,7 +47,7 @@ namespace AngelaDesktop {
       menu.MenuItems.Add("관리 화면 열기", (sender, args) => OpenWindow());
       menu.MenuItems.Add("종료", (sender, args) => ExitThread());
       tray = new NotifyIcon();
-      tray.Icon = SystemIcons.Application;
+      tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
       tray.Text = "Angela 도서 실물조사";
       tray.ContextMenu = menu;
       tray.DoubleClick += (sender, args) => OpenWindow();
@@ -48,6 +55,10 @@ namespace AngelaDesktop {
       server.EnableRaisingEvents = true;
       server.Exited += (sender, args) => { if (tray.Visible) Application.ExitThread(); };
       OpenWindow();
+      browserTimer = new System.Windows.Forms.Timer();
+      browserTimer.Interval = 500;
+      browserTimer.Tick += (sender, args) => TrackBrowserWindow();
+      browserTimer.Start();
     }
 
     private static int FreePort() {
@@ -70,16 +81,28 @@ namespace AngelaDesktop {
       return false;
     }
     private void OpenWindow() {
+      if (browserWindowSeen && IsWindow(browserWindow)) return;
       string edge = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe");
       if (File.Exists(edge)) {
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Angela", "EdgeProfile");
-        Process.Start(edge, "--app=\"" + url + "\" --user-data-dir=\"" + profile + "\"");
-      } else Process.Start(url);
+        browser = Process.Start(edge, "--app=\"" + url + "\" --user-data-dir=\"" + profile + "\" --disable-background-mode --no-first-run");
+      } else throw new Exception("Microsoft Edge가 필요합니다. Edge를 설치한 뒤 다시 실행하세요.");
+      if (browser == null) throw new Exception("관리 창을 열 수 없습니다.");
+    }
+    private void TrackBrowserWindow() {
+      if (browser == null) return;
+      browser.Refresh();
+      if (!browserWindowSeen) {
+        if (browser.HasExited) { ExitThread(); return; }
+        IntPtr window = browser.MainWindowHandle;
+        if (window != IntPtr.Zero) { browserWindow = window; browserWindowSeen = true; }
+      } else if (!IsWindow(browserWindow) || browser.HasExited) ExitThread();
     }
     private void Shutdown() {
       if (server != null && !server.HasExited) { try { server.Kill(); server.WaitForExit(3000); } catch { } }
     }
     protected override void ExitThreadCore() {
+      if (browserTimer != null) { browserTimer.Stop(); browserTimer.Dispose(); }
       if (tray != null) { tray.Visible = false; tray.Dispose(); }
       Shutdown();
       base.ExitThreadCore();
@@ -88,8 +111,12 @@ namespace AngelaDesktop {
       try {
         bool smoke = args.Length>0 && args[0] == "--smoke";
         if (!smoke) Application.EnableVisualStyles();
-        Launcher launcher = new Launcher(smoke);
-        if (!smoke) Application.Run(launcher);
+        bool firstInstance;
+        using (Mutex singleInstance = new Mutex(true, "Local\\AngelaDesktopSingleInstance", out firstInstance)) {
+          if (!smoke && !firstInstance) return 0;
+          Launcher launcher = new Launcher(smoke);
+          if (!smoke) Application.Run(launcher);
+        }
         return 0;
       } catch (Exception error) {
         if (args.Length>0 && args[0] == "--smoke") File.WriteAllText(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "smoke-error.txt"), error.ToString());
