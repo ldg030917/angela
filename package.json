@@ -1,1 +1,1 @@
-{"name":"angela-library-survey","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test tests/domain.test.mjs tests/inventory.test.mjs"},"engines":{"node":">=22"}}
+{"name":"angela-library-survey","private":true,"type":"module","scripts":{"start":"node server.mjs","test":"node --test tests/domain.test.mjs tests/inventory.test.mjs tests/ledger.test.mjs"},"engines":{"node":">=22"}}

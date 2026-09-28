@@ -2,5 +2,6 @@ node_modules/
 data/
 data-v2-smoke/
 data-v2-publisher/
+data-real-validation/
 outputs/
 test-results/

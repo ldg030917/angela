@@ -4,7 +4,7 @@ import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview} from './inventory.mjs';
-import {readLedger} from './ledger-excel.mjs';
+import {readExcelUpload} from './excel-upload.mjs';
 import {makeExcel} from './xlsx-native.mjs';
 import {makeInventoryExcel} from './inventory-excel.mjs';
 
@@ -42,8 +42,7 @@ async function handle(req,res){
   const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>10*1024*1024)throw Error('파일 크기는 10MB 이하로 제한됩니다.');chunks.push(chunk);}
   const raw=Buffer.concat(chunks);
   if(p==='/api/excel'){
-    const location=path.join(data,'upload.xlsx');await fs.writeFile(location,raw);
-    const rows=await readLedger(location);if(!rows.length)throw Error('빈 원장입니다.');
+    const rows=await readExcelUpload(raw);if(!rows.length)throw Error('빈 원장입니다.');
     await save(addLegacy(db,rows));return json({count:rows.length});
   }
   const body=JSON.parse(raw.toString()||'{}');
