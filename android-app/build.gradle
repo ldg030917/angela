@@ -1,0 +1,11 @@
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.7.3' }
+}
+
+tasks.register('packageForPc', Copy) {
+    dependsOn ':app:assembleDebug'
+    from project(':app').layout.buildDirectory.file('outputs/apk/debug/app-debug.apk')
+    into layout.projectDirectory.dir('../dist')
+    rename 'app-debug.apk', 'Angela-offline-android.apk'
+}

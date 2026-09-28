@@ -28,6 +28,12 @@ async function handle(req,res){
     if(p.startsWith('/api/session/')){const s=db.sessions.find(x=>x.id===p.split('/').pop());if(!s)throw Error('조사를 찾을 수 없습니다.');return json(s);}
     if(p.startsWith('/api/download/')){const item=downloads.get(p.split('/').pop());if(!item||item.expires<Date.now())throw Error('다운로드가 만료되었습니다.');res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="${item.name}"`,'Cache-Control':'no-store'});return res.end(item.content);}
     if(p==='/api/sample'){const location=path.join(data,'sample.xlsx');await makeExcel(sample,[],location);return file(location,'sample.xlsx');}
+    if(p==='/api/android-app'){
+      const apk=path.join(root,'dist','Angela-offline-android.apk');
+      const content=await fs.readFile(apk);
+      res.writeHead(200,{'Content-Type':'application/vnd.android.package-archive','Content-Disposition':'attachment; filename="Angela-offline-android.apk"','Content-Length':content.length});
+      return res.end(content);
+    }
     if(p==='/api/export'){
       const location=path.join(data,'result.xlsx');
       await makeInventoryExcel(db,location);return file(location,'result.xlsx');

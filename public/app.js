@@ -1,14 +1,15 @@
-import {canonical,search,searchKey,publisherDictionary} from '/normalize.mjs';
+import {canonical,search,searchKey,publisherDictionary} from './normalize.mjs';
 
 const $=s=>document.querySelector(s),app=$('#app'),dialog=$('#dialog');
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state,survey,report,inspection,noticeTimer;
-const mobilePage=location.pathname==='/mobile';
+const nativeApp=!!window.AngelaAndroid;
+const mobilePage=location.pathname==='/mobile'||location.pathname.endsWith('/mobile.html');
 function notice(message,error=false){const el=$('#notice');el.textContent=message;el.className=error?'error':'';el.style.display='block';clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>el.style.display='none',6000);}
 const run=fn=>async(...args)=>{try{await fn(...args);}catch(e){notice(e.message,true);}};
 async function api(url,body,raw=false){const response=await fetch(url,body===undefined?{}:{method:'POST',headers:{'Content-Type':raw?'application/octet-stream':'application/json'},body:raw?body:JSON.stringify(body)});const value=await response.json();if(!response.ok)throw Error(value.error||'요청에 실패했습니다.');return value;}
 function click(selector,fn){$(selector)?.addEventListener('click',run(fn));}
-async function download(data,name){const {url}=await api('/api/download-json',{payload:data,filename:name});dialog.innerHTML=`<h2>파일 준비 완료</h2><a class="button" href="${url}" download="${esc(name)}">${esc(name)} 저장</a><div class="actions"><button id="close" class="secondary">닫기</button></div>`;click('#close',()=>dialog.close());dialog.showModal();}
+async function download(data,name){if(nativeApp){window.AngelaAndroid.saveSurvey(JSON.stringify(data,null,2),name);return;}const {url}=await api('/api/download-json',{payload:data,filename:name});dialog.innerHTML=`<h2>파일 준비 완료</h2><a class="button" href="${url}" download="${esc(name)}">${esc(name)} 저장</a><div class="actions"><button id="close" class="secondary">닫기</button></div>`;click('#close',()=>dialog.close());dialog.showModal();}
 const label=b=>`${b.physicalId||b.legacyLedgerId||b.temporaryId||''} · ${b.titleCanonical||b.titleRaw||''} · ${b.publisherCanonical||''}`;
 function candidateList(items,type){return items.map(x=>`<div class="candidate"><strong>${esc(label(x))}</strong> <span class="muted">${type}${x.matchScore?` · 관련도 ${x.matchScore}`:''}</span></div>`).join('');}
 
@@ -17,7 +18,7 @@ async function desktop(){
   if(latest)$('#mobile-nav').href=`/mobile?session=${latest.id}`;
   app.innerHTML=`<div class="lead"><div><div class="eyebrow">LIBRARY INVENTORY</div><h1>도서 실물조사</h1><p class="muted">과거 장부 ${state.legacyRecords.length}행 · 확인한 실물 ${state.physicalBooks.length}권</p></div><a class="button secondary" href="/api/export">결과 Excel 생성</a></div>
     <div class="steps"><section class="panel"><span class="step-number">01 / 원장</span><h2>과거 Excel 가져오기</h2><a class="button secondary" href="/api/sample">샘플 다운로드</a><label for="excel">Excel 원장</label><input id="excel" type="file" accept=".xls,.xlsx" ${state.legacyRecords.length?'disabled':''}><p class="muted">.xls는 PC에 Microsoft Excel이 필요합니다. 제목이 있는 행을 시트명·행 번호와 함께 보존합니다.</p></section>
-    <section class="panel"><span class="step-number">02 / 조사</span><h2>조사 시작</h2><input id="worker" placeholder="작업자"><input id="area" placeholder="조사 구역" style="margin-top:8px"><button id="create" style="margin-top:12px" ${!state.legacyRecords.length&&!state.physicalBooks.length?'disabled':''}>조사용 데이터 생성</button>${latest?`<a class="session-link" href="/mobile?session=${latest.id}">모바일 조사 화면 열기 ↗</a><button id="package" class="secondary">조사용 JSON 저장</button>`:''}</section>
+    <section class="panel"><span class="step-number">02 / 조사</span><h2>조사 시작</h2><input id="worker" placeholder="작업자"><input id="area" placeholder="조사 구역" style="margin-top:8px"><button id="create" style="margin-top:12px" ${!state.legacyRecords.length&&!state.physicalBooks.length?'disabled':''}>조사용 데이터 생성</button>${latest?`<button id="package" class="secondary">Android 앱용 조사 파일 다운로드</button>`:''}<a class="session-link" href="/api/android-app">Android 현장조사 앱 다운로드</a></section>
     <section class="panel"><span class="step-number">03 / 병합</span><h2>조사 결과 반영</h2><label for="json">조사 JSON 파일</label><input id="json" type="file" accept=".json"><p class="muted">충돌과 검토 항목을 결정한 뒤 실물번호를 발급합니다.</p></section></div>
     <section id="review"></section><section class="panel"><h2>검토 필요 <span class="tag warn">${state.reviewQueue.length+state.legacyRecords.filter(x=>x.reviewRequired).length}건</span></h2><div id="queue"></div></section>
     <section class="panel"><h2>실물 목록</h2><input id="pc-search" type="search" placeholder="실물번호 · 제목 · 출판사 검색"><div id="physical-list"></div></section>
@@ -49,22 +50,29 @@ async function inspect(){
 
 const surveyKey=id=>`angela-survey-v2:${id}`;
 function saveSurvey(next){localStorage.setItem(surveyKey(next.id),JSON.stringify(next));survey=next;}
+function loadPackage(value){if(value?.schema!=='angela-package/v2'||!value.id||!value.catalogId||!Array.isArray(value.legacyRecords)||!Array.isArray(value.physicalBooks))throw Error('조사용 JSON v2가 아닙니다.');const previous=localStorage.getItem(surveyKey(value.id));if(previous&&JSON.parse(previous).entries?.length)throw Error('이 조사본의 저장된 기록이 있습니다. 기존 조사 계속하기를 사용하세요.');saveSurvey({...value,entries:[],savedAt:null});if(!nativeApp)history.replaceState(null,'',`/mobile?session=${encodeURIComponent(value.id)}`);mobileRender();}
+window.angelaOpenPackage=text=>{try{loadPackage(JSON.parse(text));}catch(e){notice(e.message,true);}};
+window.angelaPackageError=message=>notice(message||'조사 파일을 열 수 없습니다.',true);
+window.angelaFileSaved=()=>notice('조사 결과 파일을 저장했습니다.');
 async function mobile(){
   const id=new URLSearchParams(location.search).get('session');
-  if(!id){app.innerHTML=`<div class="mobile-wrap"><h1>현장 도서 조사</h1><section class="panel"><label for="package-file">조사용 JSON 열기</label><input id="package-file" type="file" accept=".json"><div id="drafts"></div></section></div>`;
-    $('#drafts').innerHTML=Object.keys(localStorage).filter(x=>x.startsWith('angela-survey-v2:')).map(x=>{try{const s=JSON.parse(localStorage.getItem(x));return `<a class="session-link" href="/mobile?session=${encodeURIComponent(s.id)}">${esc(s.createdAt)} · ${s.entries.length}권 조사 계속하기</a>`;}catch{return '';}}).join('');
-    $('#package-file').onchange=run(async e=>{const value=JSON.parse(await e.target.files[0].text());if(value.schema!=='angela-package/v2')throw Error('조사용 JSON v2가 아닙니다.');saveSurvey({...value,entries:[],savedAt:null});history.replaceState(null,'',`/mobile?session=${encodeURIComponent(value.id)}`);mobileRender();});return;}
+  if(!id){app.innerHTML=`<div class="mobile-wrap"><h1>현장 도서 조사</h1><section class="panel">${nativeApp?'<button id="open-package">PC에서 받은 조사 파일 열기</button>':'<label for="package-file">조사용 JSON 열기</label><input id="package-file" type="file" accept=".json">'}<div id="drafts"></div></section></div>`;
+    $('#drafts').innerHTML=Object.keys(localStorage).filter(x=>x.startsWith('angela-survey-v2:')).map(x=>{try{const s=JSON.parse(localStorage.getItem(x));return `<button class="session-link secondary" data-draft="${esc(s.id)}">${esc(s.createdAt)} · ${s.entries.length}권 조사 계속하기</button>`;}catch{return '';}}).join('');
+    document.querySelectorAll('[data-draft]').forEach(el=>el.onclick=()=>{survey=JSON.parse(localStorage.getItem(surveyKey(el.dataset.draft)));mobileRender();});
+    if(nativeApp)click('#open-package',()=>window.AngelaAndroid.openPackage());
+    else $('#package-file').onchange=run(async e=>loadPackage(JSON.parse(await e.target.files[0].text())));return;}
   const cached=localStorage.getItem(surveyKey(id));survey=cached?JSON.parse(cached):{...await api(`/api/session/${id}`),entries:[],savedAt:null};
   if(survey.schema!=='angela-package/v2')throw Error('이전 조사 형식입니다. PC에서 새 조사를 생성하세요.');
   saveSurvey(survey);mobileRender();
 }
 function mobileRender(){
-  app.innerHTML=`<div class="mobile-wrap"><div class="lead"><div><div class="eyebrow">FIELD SURVEY</div><h1>실물 한 권씩 조사</h1><p class="muted">${esc(survey.worker||'작업자 미기재')} · ${esc(survey.area||'구역 미기재')} · ${survey.entries.length}권 기록</p></div><span class="saved">${survey.savedAt?'기기에 저장됨':'조사 준비 완료'}</span></div>
+  app.innerHTML=`<div class="mobile-wrap"><div class="lead"><div><div class="eyebrow">FIELD SURVEY</div><h1>실물 한 권씩 조사</h1><p class="muted">${esc(survey.worker||'작업자 미기재')} · ${esc(survey.area||'구역 미기재')} · ${survey.entries.length}권 기록</p></div><span class="saved">${survey.savedAt?'기기에 저장됨':'조사 준비 완료'}</span></div>${nativeApp?'<button id="home" class="secondary">조사 목록 / 새 파일 열기</button>':''}
     <section class="panel"><label for="find">실물번호 또는 제목 검색</label><input id="find" type="search" placeholder="예: 2014-0087, 김수환 사랑, ㄱㄹㄷㅊㅇㅅ"><div id="matches"></div></section>
     <div class="actions"><button id="numbered">＋ 번호 있는 책</button><button id="unlabelled" class="secondary">번호 없음 / 훼손</button></div>
-    <section class="panel" style="margin-top:18px"><h2>이번 조사 기록</h2><div id="entries"></div><button id="export" ${!survey.entries.length?'disabled':''}>조사 JSON export</button></section></div>`;
+    <section class="panel" style="margin-top:18px"><h2>이번 조사 기록</h2><div id="entries"></div><button id="export" ${!survey.entries.length?'disabled':''}>조사 결과 파일 저장</button></section></div>`;
   $('#find').oninput=renderMatches;renderMatches();renderEntries();
   click('#numbered',()=>entryDialog(false));click('#unlabelled',()=>entryDialog(true));
+  click('#home',mobile);
   click('#export',()=>download({schema:'angela-survey/v2',catalogId:survey.catalogId,sessionId:survey.id,worker:survey.worker,area:survey.area,entries:survey.entries},`survey-result-${survey.id}.json`));
 }
 function renderMatches(){
