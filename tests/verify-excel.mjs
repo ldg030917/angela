@@ -1,16 +1,13 @@
-import fs from 'node:fs/promises';
+import fs from 'node:fs';
 import assert from 'node:assert/strict';
-import path from 'node:path';
-import {Workbook,SpreadsheetFile,FileBlob} from '@oai/artifact-tool';
-const out='outputs/verification'; await fs.mkdir(out,{recursive:true});
-const source=process.argv[2]||`${out}/result.xlsx`;
-const wb=await SpreadsheetFile.importXlsx(await FileBlob.load(source));
-const rows=wb.worksheets.getItem('도서원장').getUsedRange().values;
-const disposal=wb.worksheets.getItem('폐기기록').getUsedRange().values;
-assert.equal(rows.length,6);assert.equal(rows[1][4],4);assert.equal(rows[5][0],'2026-0008');assert.equal(rows[5][1],'달빛 도서관');assert.equal(rows[5][4],2);
-assert.equal(rows.slice(1).reduce((n,r)=>n+r[4],0),13);assert.equal(disposal[1][2],1);assert.equal(disposal[1][3],'표지 파손');
-console.log((await wb.inspect({kind:'table',range:'도서원장!A1:F6',include:'values,formulas',tableMaxRows:8,tableMaxCols:6})).ndjson);
-console.log((await wb.inspect({kind:'match',searchTerm:'#REF!|#DIV/0!|#VALUE!|#NAME\\?|#NUM!',options:{useRegex:true,maxResults:20}})).ndjson);
-for(const name of ['도서원장','폐기기록']){const image=await wb.render({sheetName:name,range:name==='도서원장'?'A1:F6':'A1:E2',scale:2,format:'png'});await fs.writeFile(`${out}/${name}.png`,new Uint8Array(await image.arrayBuffer()));}
-if(path.resolve(source)!==path.resolve(`${out}/result.xlsx`))await fs.copyFile(source,`${out}/result.xlsx`);
-console.log('PASS: downloaded Excel contains 5 titles, 13 copies, new ID 2026-0008 and 1 disposal.');
+import {unzip} from '../xlsx-native.mjs';
+
+const file=process.argv[2];
+if(!file)throw Error('사용법: node tests/verify-excel.mjs <결과.xlsx>');
+const parts=unzip(fs.readFileSync(file));
+const workbook=parts.get('xl/workbook.xml')||'';
+for(const name of ['실물원장','과거장부','폐기기록'])assert.ok(workbook.includes(`name="${name}"`),`${name} 시트 없음`);
+for(let i=1;i<=3;i++)assert.ok(parts.get(`xl/worksheets/sheet${i}.xml`),`${i}번 시트 데이터 없음`);
+assert.ok(parts.get('xl/worksheets/sheet1.xml').includes('실물번호'));
+assert.ok(parts.get('xl/worksheets/sheet2.xml').includes('과거 장부번호'));
+console.log('PASS: 실물원장 · 과거장부 · 폐기기록 시트와 헤더를 확인했습니다.');

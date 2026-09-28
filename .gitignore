@@ -1,4 +1,6 @@
 node_modules/
 data/
+data-v2-smoke/
+data-v2-publisher/
 outputs/
 test-results/
