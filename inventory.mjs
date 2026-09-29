@@ -84,11 +84,34 @@ function normalizedEntry(e) {
   return {...e,physicalId,oldPhysicalId,action,temporaryId,volume:canonical(e.volume||''),note:String(e.note||''),acquiredDateRaw:String(e.acquiredDateRaw||''),
     ...clean('title',e.titleRaw),...clean('publisher',e.publisherRaw)};
 }
+const entryKey=e=>e.action==='CHANGE_PHYSICAL_ID'?e.oldPhysicalId:idOf(e);
+const entrySignature=e=>JSON.stringify(Object.fromEntries(Object.entries(e).filter(([key])=>key!=='recordedAt').sort(([a],[b])=>a.localeCompare(b))));
+function previousReport(db,report){
+  const sameId=(db.applied||[]).filter(x=>report.reportId&&x.reportId===report.reportId&&x.sessionId===report.sessionId);
+  return sameId.at(-1)||(db.applied||[]).filter(x=>!x.reportId&&x.sessionId===report.sessionId).at(-1)||null;
+}
+function appliedPhysicalId(db,report,key){
+  const records=(db.applied||[]).filter(x=>x.sessionId===report.sessionId&&(!report.reportId||x.reportId===report.reportId||!x.reportId));
+  for(const applied of records.reverse()){
+    const match=applied.mapping?.find(x=>x.temporaryId===key||x.oldPhysicalId===key);
+    if(match)return match.physicalId;
+  }
+  return key;
+}
+function reflectedByCurrent(db,report,e){
+  const id=appliedPhysicalId(db,report,entryKey(e));
+  const current=db.physicalBooks.find(x=>x.physicalId===id);
+  if(!current)return false;
+  if(e.action==='CHANGE_PHYSICAL_ID')return current.physicalId===e.physicalId;
+  if(current.status!==e.status||current.labelStatus!==e.labelStatus)return false;
+  if(e.action==='CONFIRM')return true;
+  if(e.action==='NEW_ACQUISITION')return current.titleCanonical===e.titleCanonical&&current.publisherCanonical===e.publisherCanonical&&current.acquiredDateRaw===e.acquiredDateRaw;
+  return current.titleCanonical===e.titleCanonical&&current.publisherCanonical===e.publisherCanonical&&current.note===e.note&&(!e.acquiredDateRaw||current.acquiredDateRaw===e.acquiredDateRaw);
+}
 export function inspectSurvey(db,report) {
   insist(report?.schema==='angela-survey/v2' && report.catalogId===db.catalogId,'이 원장의 조사 JSON v2가 아닙니다.');
   const session=db.sessions.find(s=>s.id===report.sessionId && !s.legacyFormat);
   insist(session,'조사 기준본을 찾을 수 없습니다.');
-  insist(!db.applied.some(x=>report.reportId?x.reportId===report.reportId:!x.reportId&&x.sessionId===report.sessionId),'이미 반영한 조사입니다.');
   insist(Array.isArray(report.entries)&&report.entries.length>0&&report.entries.length<=10000,'조사 항목이 없습니다.');
   const entries=report.entries.map(normalizedEntry),seen=new Map(),reviews=[];
   for(const e of entries){
@@ -98,9 +121,23 @@ export function inspectSurvey(db,report) {
       insist(JSON.stringify({...prev,recordedAt:null})===JSON.stringify({...e,recordedAt:null}),`같은 실물 ${id}의 조사 내용이 서로 다릅니다. 작업자가 확인해야 합니다.`);
     } else seen.set(id,e);
   }
-  const unique=[...seen.values()];
+  const allEntries=[...seen.values()],previous=previousReport(db,report),previousSignatures=previous?.entrySignatures||{};
+  const previouslyApplied=new Set();
+  const unique=allEntries.filter(e=>{
+    if(!previous)return true;
+    const key=entryKey(e),signature=entrySignature(e);
+    if(Object.hasOwn(previousSignatures,key)){
+      previouslyApplied.add(key);
+      return previousSignatures[key]!==signature;
+    }
+    if(!previous.entrySignatures&&reflectedByCurrent(db,report,e)){previouslyApplied.add(key);return false;}
+    if(!previous.entrySignatures&&db.physicalBooks.some(x=>x.physicalId===appliedPhysicalId(db,report,key)))previouslyApplied.add(key);
+    return true;
+  });
   for(const e of unique.filter(x=>x.action==='CHANGE_PHYSICAL_ID'))insist(!unique.some(x=>x!==e&&(x.physicalId===e.oldPhysicalId||x.oldPhysicalId===e.oldPhysicalId)),'한 조사에서 같은 기존 실물번호를 중복 처리할 수 없습니다.');
   for(const e of unique){
+    const key=entryKey(e);
+    if(previouslyApplied.has(key))reviews.push({key:'reimport:'+key,kind:'reimport',entryId:idOf(e),message:'이전에 반영한 '+key+'의 조사 내용이 변경되었습니다. 새 내용을 적용할지 확인하세요.',options:['apply','keep','defer']});
     if(e.legacyRecordId) insist(db.legacyRecords.some(x=>x.recordId===e.legacyRecordId),'연결할 장부 항목을 찾을 수 없습니다.');
     if(e.action==='CHANGE_PHYSICAL_ID'){
       const old=db.physicalBooks.find(x=>x.physicalId===e.oldPhysicalId);
@@ -114,9 +151,9 @@ export function inspectSurvey(db,report) {
     if(e.action==='NEW_ACQUISITION')continue;
     const current=db.physicalBooks.find(x=>x.physicalId===e.physicalId);
     const baseline=session.physicalBooks.find(x=>x.physicalId===e.physicalId);
-    if(current&&e.isNew)fail(`이미 등록된 실물번호입니다: ${e.physicalId}`);
+    if(current&&e.isNew&&!previouslyApplied.has(key))fail(`이미 등록된 실물번호입니다: ${e.physicalId}`);
     if(e.physicalId&&!current&&!e.isNew)fail(`기존 실물을 찾을 수 없습니다: ${e.physicalId}`);
-    if(e.physicalId && !current && db.issuedIds.includes(e.physicalId)) fail(`이미 발급된 실물 번호입니다: ${e.physicalId}`);
+    if(e.physicalId && !current && db.issuedIds.includes(e.physicalId)&&!previouslyApplied.has(key)) fail(`이미 발급된 실물 번호입니다: ${e.physicalId}`);
     if(['CONFIRM','UPDATE_INFO'].includes(e.action))insist(current&&!e.isNew,'기존 실물 처리 대상이 아닙니다.');
     if(current && !baseline) reviews.push({key:`existing:${e.physicalId}`,kind:'existing',entryId:e.physicalId,message:'조사 시작 이후 등록된 실물 번호입니다.',options:['keep','apply']});
     if(current && baseline && current.version!==baseline.version) reviews.push({key:`conflict:${e.physicalId}`,kind:'conflict',entryId:e.physicalId,message:'조사 시작 이후 PC에서 변경된 실물입니다.',options:['keep','apply']});
@@ -126,7 +163,7 @@ export function inspectSurvey(db,report) {
     const candidates=search(e.titleRaw,db.physicalBooks.filter(x=>x.physicalId!==e.physicalId),5).filter(x=>x.matchScore>=55);
     if(!current && candidates.length) reviews.push({key:`similar:${idOf(e)}`,kind:'similar',entryId:idOf(e),message:'유사한 기존 실물이 있습니다.',candidates:candidates.map(x=>({physicalId:x.physicalId,title:x.titleCanonical,score:x.matchScore})),options:e.physicalId?['distinct','defer']:['distinct','link','defer']});
   }
-  return {revision:db.revision,entries:unique,reviews};
+  return {revision:db.revision,entries:unique,reviews,unchangedCount:allEntries.length-unique.length,entrySignatures:Object.fromEntries(allEntries.map(e=>[entryKey(e),entrySignature(e)]))};
 }
 const idOf=e=>e.physicalId||e.temporaryId;
 export function nextPhysicalId(db,year,reserved=[]) {
@@ -181,12 +218,22 @@ function applyIdChange(next,e,newId,sessionId){
 export function applySurvey(db,report,decisions,revision,year) {
   insist(revision===db.revision,'검사 후 원장이 변경되었습니다. 다시 검사하세요.');
   const inspected=inspectSurvey(db,report),next=structuredClone(db),mapping=[];
+  insist(inspected.entries.length>0,'이전에 반영한 조사와 비교해 변경된 항목이 없습니다.');
   for(const review of inspected.reviews) insist(review.options.includes(decisions?.[review.key]),`검토 항목을 결정하세요: ${review.message}`);
   for(const e of inspected.entries){
-    const key=idOf(e);
+    const key=idOf(e),reimport=decisions?.['reimport:'+entryKey(e)];
+    if(reimport==='keep')continue;
+    if(reimport==='defer'){next.reviewQueue.push({id:randomUUID(),kind:'unresolved',entry:e,sessionId:report.sessionId,createdAt:now()});continue;}
     if(e.action==='NEW_ACQUISITION'){
-      const {next:created,ids}=addNewAcquisition(next,{year:e.issuedYear,quantity:1,acquiredDateRaw:e.acquiredDateRaw,titleRaw:e.titleRaw,publisherRaw:e.publisherRaw});
-      Object.assign(next,created);mapping.push({temporaryId:e.physicalId,physicalId:ids[0],title:e.titleCanonical});
+      const existingId=reimport==='apply'?appliedPhysicalId(db,report,entryKey(e)):null;
+      const existing=existingId?next.physicalBooks.find(x=>x.physicalId===existingId):null;
+      if(existing){
+        insist(existing.physicalId.startsWith(String(e.issuedYear)+'-'),'기존 입수 번호의 연도 변경은 PC 실물 목록에서 수정하세요.');
+        Object.assign(next,editPhysicalBook(next,existingId,{physicalId:existingId,version:existing.version,acquiredDateRaw:e.acquiredDateRaw,titleRaw:e.titleRaw,publisherRaw:e.publisherRaw,status:'ACTIVE'}));
+      }else{
+        const {next:created,ids}=addNewAcquisition(next,{year:e.issuedYear,quantity:1,acquiredDateRaw:e.acquiredDateRaw,titleRaw:e.titleRaw,publisherRaw:e.publisherRaw});
+        Object.assign(next,created);mapping.push({temporaryId:e.physicalId,physicalId:ids[0],title:e.titleCanonical});
+      }
       continue;
     }
     if(e.action==='CHANGE_PHYSICAL_ID'){
@@ -223,7 +270,7 @@ export function applySurvey(db,report,decisions,revision,year) {
     if(!next.issuedIds.includes(id))next.issuedIds.push(id);
     if(e.status==='DISCARDED'&&old?.status!=='DISCARDED')next.disposals.push({physicalId:id,legacyRecordId:e.legacyRecordId||null,title:e.titleCanonical,at:row.discardedAt,note:e.note,sessionId:report.sessionId});
   }
-  next.applied.push({sessionId:report.sessionId,reportId:report.reportId||null,at:now(),mapping});next.revision++;
+  next.applied.push({sessionId:report.sessionId,reportId:report.reportId||null,at:now(),mapping,entrySignatures:inspected.entrySignatures});next.revision++;
   return {next,mapping};
 }
 export function resolveReview(db,reviewId,mode,physicalId,year,status){

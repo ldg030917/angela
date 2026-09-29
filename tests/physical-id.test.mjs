@@ -74,5 +74,5 @@ test('같은 조사본에서 만든 작업자별 결과를 차례로 반영하�
   const secondPreview=inspectSurvey(next,second);
   const applied=applySurvey(next,second,{},secondPreview.revision,2026).next;
   assert.equal(applied.applied.length,2);
-  assert.throws(()=>inspectSurvey(applied,first),/이미 반영한 조사/);
+  assert.equal(inspectSurvey(applied,first).entries.length,0);
 });

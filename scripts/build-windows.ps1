@@ -5,12 +5,18 @@ if (-not (Test-Path -LiteralPath $compiler)) { throw 'Windows .NET Framework C# 
 $dist = Join-Path $projectRoot 'dist'
 New-Item -ItemType Directory -Path $dist -Force | Out-Null
 & (Join-Path $PSScriptRoot 'create-windows-icon.ps1') | Out-Null
-& $compiler /nologo /target:winexe "/out:$(Join-Path $dist 'Angela.exe')" "/win32icon:$(Join-Path $projectRoot 'windows\Angela.ico')" /r:System.Windows.Forms.dll /r:System.Drawing.dll (Join-Path $projectRoot 'windows\Program.cs')
-if ($LASTEXITCODE -ne 0) { throw 'Angela.exe compilation failed.' }
-
 $bundle = Join-Path $dist 'Angela-Windows'
 New-Item -ItemType Directory -Path $bundle -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $dist 'Angela.exe') -Destination $bundle -Force
+$compiled = Join-Path $dist 'Angela-build.exe'
+& $compiler /nologo /target:winexe "/out:$compiled" "/win32icon:$(Join-Path $projectRoot 'windows\Angela.ico')" /r:System.Windows.Forms.dll /r:System.Drawing.dll (Join-Path $projectRoot 'windows\Program.cs')
+if ($LASTEXITCODE -ne 0) { throw 'Angela.exe compilation failed.' }
+Copy-Item -LiteralPath $compiled -Destination (Join-Path $bundle 'Angela.exe') -Force
+try {
+    Copy-Item -LiteralPath $compiled -Destination (Join-Path $dist 'Angela.exe') -Force -ErrorAction Stop
+} catch {
+    Write-Warning 'Angela.exe is running. The portable ZIP contains the latest executable; close Angela to replace the standalone copy.'
+}
+Remove-Item -LiteralPath $compiled -Force
 $nodeSource = if ($env:ANGELA_NODE) { $env:ANGELA_NODE } else { (Get-Command node -ErrorAction Stop).Source }
 Copy-Item -LiteralPath $nodeSource -Destination (Join-Path $bundle 'node.exe') -Force
 Get-ChildItem -LiteralPath $projectRoot -Filter '*.mjs' -File | Copy-Item -Destination $bundle -Force
