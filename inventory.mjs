@@ -7,6 +7,15 @@ const insist=(ok,message)=>{if(!ok)fail(message);};
 export const validId=validatePhysicalId;
 const now=()=>new Date().toISOString();
 const clean=(kind,raw)=>textFields(kind,raw);
+function acquisitionInput(input){
+  const year=Number(input.year),quantity=Number(input.quantity),date=String(input.acquiredDateRaw||'').trim();
+  insist(Number.isInteger(year)&&year>=2000&&year<=9999,'발급 연도를 확인하세요.');
+  insist(Number.isInteger(quantity)&&quantity>=1&&quantity<=100,'매수는 1~100으로 입력하세요.');
+  insist(/^\d{4}-\d{2}-\d{2}$/.test(date)&&!Number.isNaN(Date.parse(date))&&new Date(date).toISOString().slice(0,10)===date,'입수일을 확인하세요.');
+  insist(canonical(input.titleRaw),'도서명을 입력하세요.');
+  insist(canonical(input.publisherRaw),'출판사를 입력하세요.');
+  return {year,quantity,acquiredDateRaw:date,titleRaw:String(input.titleRaw),publisherRaw:String(input.publisherRaw)};
+}
 function publisherFields(db,raw){
   const value=String(raw??''),key=searchKey(value);
   const existing=(db.publishers||publisherDictionary(db.legacyRecords,db.physicalBooks)).find(x=>x.id===key);
@@ -58,7 +67,11 @@ function normalizedEntry(e) {
   const physicalId=e.physicalId?normalizePhysicalId(e.physicalId):null,temporaryId=e.temporaryId||null;
   const oldPhysicalId=e.oldPhysicalId?normalizePhysicalId(e.oldPhysicalId):null;
   const action=e.action||null;
-  insist(!action||['CONFIRM','UPDATE_INFO','CHANGE_PHYSICAL_ID'].includes(action),'조사 처리 형식이 올바르지 않습니다.');
+  insist(!action||['CONFIRM','UPDATE_INFO','CHANGE_PHYSICAL_ID','NEW_ACQUISITION'].includes(action),'조사 처리 형식이 올바르지 않습니다.');
+  if(action==='NEW_ACQUISITION'){
+    const fields=acquisitionInput({...e,year:e.issuedYear,quantity:1});
+    insist(e.isNew&&!temporaryId&&physicalId?.startsWith(String(fields.year)+'-')&&!e.legacyRecordId&&e.status==='ACTIVE','신규 입수 항목 형식이 올바르지 않습니다.');
+  }
   if(action==='CHANGE_PHYSICAL_ID')insist(oldPhysicalId&&physicalId&&oldPhysicalId!==physicalId&&!e.isNew&&!temporaryId,'기존 번호와 서로 다른 새 실물번호가 필요합니다.');
   insist((physicalId&&validId(physicalId)) || (temporaryId&&typeof temporaryId==='string'&&temporaryId.startsWith('temp-')),'실물 번호 또는 임시 ID가 필요합니다.');
   insist(!(physicalId&&temporaryId),'실물 번호와 임시 ID를 함께 지정할 수 없습니다.');
@@ -98,6 +111,7 @@ export function inspectSurvey(db,report) {
       reviews.push({key:`id-change:${e.oldPhysicalId}`,kind:'id-change',entryId:e.physicalId,oldPhysicalId:e.oldPhysicalId,physicalId:e.physicalId,message:`실물번호 변경 요청: ${e.oldPhysicalId} → ${e.physicalId}${occupied?' · 새 번호가 이미 사용 중입니다. 다른 번호를 입력하거나 보류하세요.':''}`,options:['keep','apply','defer']});
       continue;
     }
+    if(e.action==='NEW_ACQUISITION')continue;
     const current=db.physicalBooks.find(x=>x.physicalId===e.physicalId);
     const baseline=session.physicalBooks.find(x=>x.physicalId===e.physicalId);
     if(current&&e.isNew)fail(`이미 등록된 실물번호입니다: ${e.physicalId}`);
@@ -123,6 +137,36 @@ export function nextPhysicalId(db,year,reserved=[]) {
   insist(max<9999,'해당 연도의 번호를 모두 사용했습니다.');
   return `${prefix}${String(max+1).padStart(4,'0')}`;
 }
+export function addNewAcquisition(db,input){
+  const fields=acquisitionInput(input),next=structuredClone(db),ids=[];
+  for(let i=0;i<fields.quantity;i++){
+    const id=nextPhysicalId(next,fields.year),stamp=now();
+    next.physicalBooks.push({physicalId:id,temporaryId:null,legacyRecordId:null,...clean('title',fields.titleRaw),...publisherFields(next,fields.publisherRaw),volume:'',quantity:1,status:'ACTIVE',labelStatus:'MISSING',note:'',acquiredDateRaw:fields.acquiredDateRaw,version:1,createdAt:stamp,updatedAt:stamp,discardedAt:null,authorRaw:'',locationRaw:''});
+    next.issuedIds.push(id);next.statusHistory.push({physicalId:id,from:null,to:'ACTIVE',at:stamp,sessionId:null});ids.push(id);
+  }
+  next.revision++;
+  return {next,ids};
+}
+export function editPhysicalBook(db,oldPhysicalId,input){
+  const next=structuredClone(db),oldId=normalizePhysicalId(oldPhysicalId),index=next.physicalBooks.findIndex(x=>x.physicalId===oldId);
+  insist(index>=0,'수정할 실물을 찾을 수 없습니다.');
+  const old=next.physicalBooks[index],id=normalizePhysicalId(input.physicalId);
+  insist(Number(input.version)===old.version,'다른 작업에서 실물이 변경되었습니다. 목록을 새로 확인하세요.');
+  insist(id===oldId||!isPhysicalIdAlreadyIssued(next,id),'이 실물 번호는 이미 다른 책에 사용 중입니다.');
+  insist(canonical(input.titleRaw),'도서명을 입력하세요.');
+  insist(canonical(input.publisherRaw),'출판사를 입력하세요.');
+  insist(['ACTIVE','DISCARDED','LOST','UNKNOWN'].includes(input.status),'실물 상태가 올바르지 않습니다.');
+  const date=String(input.acquiredDateRaw||'').trim();
+  insist(!date||/^\d{4}[-.]\d{2}[-.]\d{2}\.?$/.test(date),'입수일 형식을 확인하세요.');
+  const stamp=now(),row={...old,physicalId:id,...clean('title',input.titleRaw),...publisherFields(next,input.publisherRaw),acquiredDateRaw:date,status:input.status,quantity:1,version:old.version+1,updatedAt:stamp,discardedAt:input.status==='DISCARDED'?(old.discardedAt||stamp):null};
+  next.physicalBooks[index]=row;
+  if(!next.issuedIds.includes(oldId))next.issuedIds.push(oldId);
+  if(id!==oldId){next.issuedIds.push(id);next.idChanges=[...(next.idChanges||[]),{oldPhysicalId:oldId,newPhysicalId:id,sessionId:null,at:stamp}];}
+  if(old.status!==row.status)next.statusHistory.push({physicalId:id,from:old.status,to:row.status,at:stamp,sessionId:null});
+  if(row.status==='DISCARDED'&&old.status!=='DISCARDED')next.disposals.push({physicalId:id,legacyRecordId:row.legacyRecordId,title:row.titleCanonical,at:stamp,note:'PC에서 상태 수정',sessionId:null});
+  next.revision++;
+  return next;
+}
 function applyIdChange(next,e,newId,sessionId){
   const id=normalizePhysicalId(newId);
   const old=next.physicalBooks.find(x=>x.physicalId===e.oldPhysicalId);
@@ -140,6 +184,11 @@ export function applySurvey(db,report,decisions,revision,year) {
   for(const review of inspected.reviews) insist(review.options.includes(decisions?.[review.key]),`검토 항목을 결정하세요: ${review.message}`);
   for(const e of inspected.entries){
     const key=idOf(e);
+    if(e.action==='NEW_ACQUISITION'){
+      const {next:created,ids}=addNewAcquisition(next,{year:e.issuedYear,quantity:1,acquiredDateRaw:e.acquiredDateRaw,titleRaw:e.titleRaw,publisherRaw:e.publisherRaw});
+      Object.assign(next,created);mapping.push({temporaryId:e.physicalId,physicalId:ids[0],title:e.titleCanonical});
+      continue;
+    }
     if(e.action==='CHANGE_PHYSICAL_ID'){
       const choice=decisions?.[`id-change:${e.oldPhysicalId}`];
       if(choice==='keep'||decisions?.[`conflict:${e.oldPhysicalId}`]==='keep')continue;

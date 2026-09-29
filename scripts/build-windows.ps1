@@ -19,7 +19,7 @@ New-Item -ItemType Directory -Path (Join-Path $bundle 'scripts') -Force | Out-Nu
 Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\convert-xls.ps1') -Destination (Join-Path $bundle 'scripts') -Force
 New-Item -ItemType Directory -Path (Join-Path $bundle 'dist') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $dist 'Angela-offline-android.apk') -Destination (Join-Path $bundle 'dist') -Force
-$archive = Join-Path $dist 'Angela-Windows-20260928.zip'
+$archive = Join-Path $dist 'Angela-Windows-20260929.zip'
 Compress-Archive -Path (Join-Path $bundle '*') -DestinationPath $archive -Force
 Write-Output "Angela.exe: $(Join-Path $dist 'Angela.exe')"
 Write-Output "Portable folder: $bundle"
