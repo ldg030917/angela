@@ -209,7 +209,7 @@ function applyIdChange(next,e,newId,sessionId){
   const old=next.physicalBooks.find(x=>x.physicalId===e.oldPhysicalId);
   insist(old,'번호를 바꿀 기존 실물을 찾을 수 없습니다.');
   insist(id!==e.oldPhysicalId&&!isPhysicalIdAlreadyIssued(next,id),'이 실물 번호는 이미 다른 책에 사용 중입니다.');
-  next.physicalBooks[next.physicalBooks.indexOf(old)]={...old,physicalId:id,labelStatus:e.labelStatus,note:e.note||old.note,version:old.version+1,updatedAt:now()};
+  next.physicalBooks[next.physicalBooks.indexOf(old)]={...old,physicalId:id,legacyRecordId:e.legacyRecordId||old.legacyRecordId,labelStatus:e.labelStatus,note:e.note||old.note,version:old.version+1,updatedAt:now()};
   if(!next.issuedIds.includes(e.oldPhysicalId))next.issuedIds.push(e.oldPhysicalId);
   next.issuedIds.push(id);
   next.idChanges=[...(next.idChanges||[]),{oldPhysicalId:e.oldPhysicalId,newPhysicalId:id,sessionId,at:now()}];

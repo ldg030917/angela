@@ -76,3 +76,17 @@ test('같은 조사본에서 만든 작업자별 결과를 차례로 반영하�
   assert.equal(applied.applied.length,2);
   assert.equal(inspectSurvey(applied,first).entries.length,0);
 });
+
+test('과거 장부에서 찾은 기존 실물의 번호를 바꾸며 장부 연결을 보존한다',()=>{
+  const {db,session}=setup();
+  db.legacyRecords.push({recordId:'legacy-1',legacyLedgerId:'2019-0007',titleRaw:'어린 왕자',titleCanonical:'어린 왕자',publisherRaw:'문학동네',publisherCanonical:'문학동네'});
+  const report={...change(session),entries:[{...change(session).entries[0],legacyRecordId:'legacy-1'}]};
+  const preview=inspectSurvey(db,report);
+  const {next}=applySurvey(db,report,{'id-change:2019-0034':'apply'},preview.revision,2026);
+  assert.equal(next.physicalBooks[0].physicalId,'2019-0087');
+  assert.equal(next.physicalBooks[0].legacyRecordId,'legacy-1');
+  assert.ok(next.issuedIds.includes('2019-0034'));
+  const later=createSession(next);next.sessions.push(later);
+  const reuse={schema:'angela-survey/v2',catalogId:'catalog',sessionId:later.id,entries:[{physicalId:'2019-0034',temporaryId:null,isNew:true,titleRaw:'다른 책',publisherRaw:'출판사',status:'ACTIVE',labelStatus:'PRESENT'}]};
+  assert.throws(()=>inspectSurvey(next,reuse),/이미 발급/);
+});

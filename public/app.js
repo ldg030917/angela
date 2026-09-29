@@ -175,12 +175,21 @@ function mobileAcquisitionDialog(){
     next.savedAt=stamp;saveSurvey(next);dialog.close();mobileRender();notice(quantity+'권을 조사 기록에 저장했습니다.');
   });
   dialog.showModal();dialog.tabIndex=-1;dialog.focus();
-}function entryDialog(noLabel=false,existing=null,legacy=null){
+}
+function physicalIdConflict(id,sourceId=null){
+  const owner=survey.physicalBooks.find(x=>x.physicalId===id);
+  if(owner&&id!==sourceId)return id+'는 이미 '+owner.titleCanonical+'의 실물번호입니다. 다른 책의 번호를 덮어쓸 수 없습니다.';
+  const pending=survey.entries.find(x=>x.physicalId===id&&x.oldPhysicalId!==sourceId);
+  if(pending)return id+'는 이번 조사 기록의 '+canonical(pending.titleRaw)+'에 이미 사용 중입니다.';
+  if(survey.issuedIds?.includes(id)&&id!==sourceId)return id+'는 이전에 발급된 번호라 다시 사용할 수 없습니다.';
+  return '';
+}
+function entryDialog(noLabel=false,existing=null,legacy=null,options={}){
   const publishers=survey.publishers||publisherDictionary(survey.legacyRecords,survey.physicalBooks);
 
   dialog.innerHTML=`<form id="entry-form"><h2>${existing?'기존 실물 조사':noLabel?'번호 없는 책':'번호 있는 책 기록'}</h2>
     ${existing?'<label for="existing-action">이 책의 처리</label><select id="existing-action"><option value="CONFIRM">기존 항목이 맞음</option><option value="UPDATE_INFO">기존 항목이 맞지만 정보가 다름</option><option value="CHANGE_PHYSICAL_ID">실물 번호 수정</option></select><p class="muted">번호 수정은 같은 책의 번호만 잘못된 경우에 선택하세요. PC에서 다시 확인합니다.</p>':''}
-    ${noLabel?'<p class="notice-inline">임시 ID로 저장합니다. PC 검토 전에는 새 실물번호를 발급하지 않습니다.</p><button type="button" id="new-from-unlabelled" class="secondary">새로 들여온 책 등록</button>':`<label for="physical-id">실제 책의 번호</label><input id="physical-id" name="physicalId" inputmode="numeric" maxlength="9" pattern="[0-9]{4}-[0-9]{4}" placeholder="YYYY-NNNN" required value="${esc(existing?.physicalId||'')}">`}
+    ${noLabel?'<p class="notice-inline">임시 ID로 저장합니다. PC 검토 전에는 새 실물번호를 발급하지 않습니다.</p><button type="button" id="new-from-unlabelled" class="secondary">새로 들여온 책 등록</button>':`<label for="physical-id">실제 책의 번호</label><input id="physical-id" name="physicalId" inputmode="numeric" maxlength="9" pattern="[0-9]{4}-[0-9]{4}" placeholder="YYYY-NNNN" required value="${esc(options.actualId||existing?.physicalId||'')}"><div id="physical-id-check" class="muted"></div>`}
     <label for="title">도서명</label><input id="title" name="titleRaw" required autocomplete="off" value="${esc(existing?.titleRaw||legacy?.titleRaw||'')}">
     <label for="publisher">출판사</label><input id="publisher" name="publisherRaw" autocomplete="off" value="${esc(existing?.publisherRaw||legacy?.publisherRaw||'')}"><div id="publisher-suggestions"></div>
     <label for="volume">권 번호 (알고 있는 경우)</label><input id="volume" name="volume" value="${esc(existing?.volume||'')}">
@@ -191,18 +200,65 @@ function mobileAcquisitionDialog(){
     <div id="duplicate-warning"></div><div class="actions"><button type="button" id="cancel" class="secondary">취소</button><button type="submit">후보 확인 후 저장</button></div></form>`;
   click('#cancel',()=>dialog.close());click('#new-from-unlabelled',()=>{dialog.close();mobileAcquisitionDialog();});
   const form=$('#entry-form');
-  const preview=()=>{if(existing){$('#duplicate-warning').innerHTML='';return;}const q=$('#title').value;const candidates=search(q,[...survey.physicalBooks,...survey.legacyRecords],5).filter(x=>x.matchScore>=55);$('#duplicate-warning').innerHTML=candidates.length?`<div class="notice-inline"><strong>비슷한 기존 도서가 있습니다. 자동 병합하지 않습니다.</strong>${candidateList(candidates,'후보')}<label for="duplicate-choice">이 책의 처리</label><select id="duplicate-choice" required><option value="">선택하세요</option><option value="distinct">다른 책 / 신규 실물로 기록</option><option value="uncertain">확실하지 않음 / PC 검토</option>${noLabel?'<option value="existing">기존 항목이 맞음 · 연결</option>':''}</select>${noLabel?`<input id="candidate-physical" inputmode="numeric" placeholder="기존 실물번호 (기존 실물 연결 시)">`:''}</div>`:'';formatIdField($('#candidate-physical'));};
+  const preview=()=>{
+    if(existing){$('#duplicate-warning').innerHTML='';return;}
+    const q=$('#title').value;
+    const candidates=search(q,[...survey.physicalBooks,...survey.legacyRecords],5).filter(x=>x.matchScore>=55);
+    const physical=search(q,survey.physicalBooks,5).filter(x=>x.matchScore>=55);
+    const linked=legacy?survey.physicalBooks.filter(x=>x.legacyRecordId===legacy.recordId):[];
+    const related=[...new Map([...linked,...physical].map(x=>[x.physicalId,x])).values()];
+    if(!legacy&&!candidates.length){$('#duplicate-warning').innerHTML='';return;}
+    const choices='<option value="">선택하세요</option>'+
+      (legacy?'<option value="ledger">선택한 장부의 같은 책 · 실제 번호로 연결</option>':'')+
+      (!noLabel&&survey.physicalBooks.length?'<option value="renumber">기존 실물의 저장 번호를 실제 번호로 수정</option>':'')+
+      '<option value="distinct">다른 책 / 신규 실물로 기록</option><option value="uncertain">확실하지 않음 / PC 검토</option>'+
+      (noLabel?'<option value="existing">기존 항목이 맞음 · 연결</option>':'');
+    const picks=related.map(x=>'<button type="button" class="secondary" data-stored-id="'+esc(x.physicalId)+'">'+esc(x.physicalId+' · '+x.titleCanonical)+'</button>').join('');
+    $('#duplicate-warning').innerHTML='<div class="notice-inline"><strong>선택한 장부와 비슷한 책을 확인하세요. 자동 병합하지 않습니다.</strong>'+
+      candidateList(candidates,'후보')+'<label for="duplicate-choice">이 책의 처리</label><select id="duplicate-choice" required>'+choices+'</select>'+
+      '<div id="renumber-fields" hidden><label for="stored-physical">현재 저장된 실물번호</label><input id="stored-physical" inputmode="numeric" maxlength="9" placeholder="YYYY-NNNN"><p class="muted">같은 책의 저장 번호를 입력하고, 실제 책에 적힌 번호로 수정합니다. PC에서 최종 확인합니다.</p>'+picks+'</div>'+
+      (noLabel?'<input id="candidate-physical" inputmode="numeric" placeholder="기존 실물번호 (기존 실물 연결 시)">':'')+'</div>';
+    $('#duplicate-choice').onchange=()=>{$('#renumber-fields').hidden=$('#duplicate-choice').value!=='renumber';};
+    document.querySelectorAll('[data-stored-id]').forEach(el=>el.onclick=()=>{$('#stored-physical').value=el.dataset.storedId;});
+    formatIdField($('#stored-physical'));formatIdField($('#candidate-physical'));
+  };
   const suggestPublisher=()=>{const q=searchKey($('#publisher').value);$('#publisher-suggestions').innerHTML=q?publishers.filter(x=>x.id.includes(q)||q.includes(x.id)).slice(0,5).map((x,i)=>`<button type="button" class="secondary" data-publisher="${i}">${esc(x.canonicalName)}${x.aliases.length>1?` · ${x.aliases.length}개 표기`:''}</button>`).join(''):'';const matches=publishers.filter(x=>x.id.includes(q)||q.includes(x.id)).slice(0,5);document.querySelectorAll('[data-publisher]').forEach(el=>el.onclick=()=>{$('#publisher').value=matches[Number(el.dataset.publisher)].canonicalName;$('#publisher-suggestions').innerHTML='';});};
+  const updateOccupancy=()=>{
+    const field=$('#physical-id'),message=$('#physical-id-check');
+    if(!field||!message)return;
+    let id;try{id=normalizePhysicalId(field.value);}catch{message.textContent='실제 책에 적힌 번호를 YYYY-NNNN 형식으로 입력하세요.';return;}
+    const conflict=id===existing?.physicalId?'':physicalIdConflict(id,existing?.physicalId);
+    message.className=conflict?'id-conflict':'muted';
+    message.textContent=id===existing?.physicalId?'현재 저장된 번호입니다.':conflict||'다른 실물에 지정되지 않은 번호입니다. PC 반영 시 다시 검사합니다.';
+  };
   formatIdField($('#physical-id'));
-  if(existing){const syncAction=()=>{const mode=$('#existing-action').value,info=mode==='UPDATE_INFO';for(const field of ['#title','#publisher','#volume'])$(field).readOnly=!info;$('#physical-id').readOnly=mode!=='CHANGE_PHYSICAL_ID';if(mode!=='CHANGE_PHYSICAL_ID')$('#physical-id').value=existing.physicalId;};$('#existing-action').onchange=syncAction;syncAction();}
+  if(existing){
+    if(options.action)$('#existing-action').value=options.action;
+    const syncAction=()=>{
+      const mode=$('#existing-action').value,info=mode==='UPDATE_INFO';
+      for(const field of ['#title','#publisher','#volume'])$(field).readOnly=!info;
+      $('#physical-id').readOnly=mode!=='CHANGE_PHYSICAL_ID';
+      $('#status').disabled=mode==='CHANGE_PHYSICAL_ID';
+      if(mode!=='CHANGE_PHYSICAL_ID')$('#physical-id').value=existing.physicalId;
+      updateOccupancy();
+    };
+    $('#existing-action').onchange=syncAction;syncAction();
+  }
+  $('#physical-id')?.addEventListener('input',updateOccupancy);updateOccupancy();
   $('#title').oninput=preview;$('#publisher').oninput=suggestPublisher;preview();suggestPublisher();
   form.onsubmit=run(async event=>{event.preventDefault();const f=new FormData(form),action=existing?$('#existing-action').value:null,id=noLabel?null:normalizePhysicalId(f.get('physicalId'));
     if(action==='CHANGE_PHYSICAL_ID'&&id===existing.physicalId)throw Error('기존 번호와 다른 새 실물번호를 입력하세요.');
-    if(id&&id!==existing?.physicalId&&isPhysicalIdAlreadyIssued(survey,id))throw Error('이 실물 번호는 이미 다른 책에 사용 중입니다.');
+    if(id&&id!==existing?.physicalId){const conflict=physicalIdConflict(id,existing?.physicalId);if(conflict)throw Error(conflict);}
     const choice=$('#duplicate-choice')?.value;if($('#duplicate-choice')&&!choice)throw Error('유사 도서 후보를 확인하고 처리 방법을 선택하세요.');
+    if(choice==='renumber'){
+      const oldId=normalizePhysicalId($('#stored-physical').value),old=survey.physicalBooks.find(x=>x.physicalId===oldId);
+      if(!old)throw Error('현재 저장된 실물번호를 확인하세요.');
+      if(id===oldId)throw Error('실제 번호와 저장된 번호가 같습니다.');
+      dialog.close();entryDialog(false,old,legacy,{action:'CHANGE_PHYSICAL_ID',actualId:id});return;
+    }
     let physicalId=id,temporaryId=null;
     if(noLabel){temporaryId=`temp-${crypto.randomUUID()}`;if(choice==='existing'){physicalId=normalizePhysicalId($('#candidate-physical').value);if(!survey.physicalBooks.some(x=>x.physicalId===physicalId))throw Error('기존 실물번호를 확인하세요.');temporaryId=null;}}
-    const entry={physicalId,oldPhysicalId:action==='CHANGE_PHYSICAL_ID'?existing.physicalId:null,action,temporaryId,isNew:!existing&&!(noLabel&&choice==='existing'),titleRaw:f.get('titleRaw'),publisherRaw:f.get('publisherRaw')||'',volume:f.get('volume')||'',acquiredDateRaw:existing?.acquiredDateRaw||'',legacyRecordId:f.get('legacyRecordId')||null,status:f.get('status'),labelStatus:noLabel?'MISSING':'PRESENT',note:f.get('note')||'',recordedAt:new Date().toISOString(),candidateChoice:choice||null};
+    const entry={physicalId,oldPhysicalId:action==='CHANGE_PHYSICAL_ID'?existing.physicalId:null,action,temporaryId,isNew:!existing&&!(noLabel&&choice==='existing'),titleRaw:f.get('titleRaw'),publisherRaw:f.get('publisherRaw')||'',volume:f.get('volume')||'',acquiredDateRaw:existing?.acquiredDateRaw||'',legacyRecordId:choice==='distinct'&&legacy?null:f.get('legacyRecordId')||null,status:action==='CHANGE_PHYSICAL_ID'?existing.status:f.get('status'),labelStatus:noLabel?'MISSING':'PRESENT',note:f.get('note')||'',recordedAt:new Date().toISOString(),candidateChoice:choice||null};
     if(choice==='uncertain'){entry.note=`[유사 도서 확인 필요] ${entry.note}`.trim();}
     const next=structuredClone(survey),index=next.entries.findIndex(x=>existing?(x.oldPhysicalId===existing.physicalId||x.physicalId===existing.physicalId):(x.physicalId&&x.physicalId===physicalId));
     if(index>=0)next.entries[index]=entry;else next.entries.push(entry);
