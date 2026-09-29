@@ -82,3 +82,36 @@ test('같은 모바일 결과의 신규 입수 수정과 추가 부수를 중복
   assert.equal(twice.physicalBooks[2].titleRaw,'두 번째 책');
   assert.equal(inspectSurvey(twice,revised).entries.length,0);
 });
+test('모바일에서 기존 조사 기록의 번호를 수정해 다시 가져오면 책을 중복 생성하지 않는다',()=>{
+  const {db,session}=setup();
+  const first=report(session,[entry('2026-0002')]);
+  const once=applySurvey(db,first,{},db.revision,2026).next;
+  const revised=report(session,[entry('2026-0003',{originalPhysicalId:'2026-0002',titleRaw:'수정한 새 책',status:'LOST'})]);
+  const preview=inspectSurvey(once,revised);
+  assert.deepEqual(preview.reviews.map(x=>x.kind),['reimport','id-change']);
+  const decisions=Object.fromEntries(preview.reviews.map(x=>[x.key,'apply']));
+  const twice=applySurvey(once,revised,decisions,preview.revision,2026).next;
+  assert.deepEqual(twice.physicalBooks.map(x=>x.physicalId),['2026-0001','2026-0003']);
+  assert.equal(twice.physicalBooks[1].titleRaw,'수정한 새 책');
+  assert.equal(twice.physicalBooks[1].status,'LOST');
+  assert.ok(twice.issuedIds.includes('2026-0002'));
+  assert.equal(inspectSurvey(twice,revised).entries.length,0);
+  const later=report(session,[entry('2026-0004',{originalPhysicalId:'2026-0002',titleRaw:'수정한 새 책',status:'LOST'})]);
+  const nextPreview=inspectSurvey(twice,later);
+  assert.ok(nextPreview.reviews.some(x=>x.key==='id-change:2026-0003'));
+  const nextDecisions=Object.fromEntries(nextPreview.reviews.map(x=>[x.key,'apply']));
+  const thrice=applySurvey(twice,later,nextDecisions,nextPreview.revision,2026).next;
+  assert.deepEqual(thrice.physicalBooks.map(x=>x.physicalId),['2026-0001','2026-0004']);
+});
+test('첫 반영 전에 모바일에서 번호를 고쳐도 이후 재수정은 같은 책으로 연결한다',()=>{
+  const {db,session}=setup();
+  const first=report(session,[entry('2026-0003',{originalPhysicalId:'2026-0002'})]);
+  const once=applySurvey(db,first,{},db.revision,2026).next;
+  assert.deepEqual(once.physicalBooks.map(x=>x.physicalId),['2026-0001','2026-0003']);
+  const revised=report(session,[entry('2026-0004',{originalPhysicalId:'2026-0002'})]);
+  const preview=inspectSurvey(once,revised);
+  assert.ok(preview.reviews.some(x=>x.key==='id-change:2026-0003'));
+  const decisions=Object.fromEntries(preview.reviews.map(x=>[x.key,'apply']));
+  const twice=applySurvey(once,revised,decisions,preview.revision,2026).next;
+  assert.deepEqual(twice.physicalBooks.map(x=>x.physicalId),['2026-0001','2026-0004']);
+});

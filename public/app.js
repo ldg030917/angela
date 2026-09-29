@@ -111,6 +111,43 @@ function pcEditDialog(id){
   $('#review').innerHTML=`<section class="panel"><h2>병합 검토 · 변경 ${p.entries.length}권 · 기존 반영 ${p.unchangedCount}권 건너뜀</h2><p class="muted">${esc(reportQueue[0]?.name||'조사 파일')} · 실물번호 변경은 여기서 최종 적용합니다.</p><div class="table-wrap"><table><thead><tr><th>구분</th><th>기존 번호</th><th>조사 번호</th><th>도서명</th><th>상태</th></tr></thead><tbody>${p.entries.map(e=>`<tr><td>${esc(category(e))}</td><td>${esc(e.oldPhysicalId||(!e.isNew?e.physicalId:'')||'—')}</td><td>${esc(e.physicalId||'번호 없음')}</td><td>${esc(e.titleCanonical)}</td><td>${esc(statusName(e.status))}</td></tr>`).join('')}</tbody></table></div>${p.reviews.map((r,i)=>`<div class="conflict"><h3>${esc(r.message)}</h3>${r.candidates?candidateList(r.candidates,'기존 실물'):''}<label for="decision-${i}">처리</label><select id="decision-${i}" data-key="${esc(r.key)}"><option value="">선택하세요</option>${r.options.map(o=>`<option value="${o}">${{keep:'기존 유지',apply:'변경 적용',defer:'보류 · PC 검토',issue:'신규 실물번호 발급',link:'기존 실물 연결',confirm:'확인 후 반영',distinct:'다른 실물로 등록'}[o]}</option>`).join('')}</select>${r.options.includes('link')?`<input id="link-${i}" inputmode="numeric" placeholder="기존 실물번호 (연결 선택 시)">`:''}${r.kind==='id-change'?`<label for="new-id-${i}">최종 실물번호 · 필요하면 직접 입력</label><input id="new-id-${i}" inputmode="numeric" value="${esc(r.physicalId)}">`:''}</div>`).join('')}<label for="year">발급 연도</label><input id="year" type="number" min="2000" max="9999" value="${state.year}"><div class="actions"><button id="apply" ${p.reviews.length?'disabled':''}>최종 반영</button><button id="recheck" class="secondary">재검사</button></div></section>`;
   const selects=[...document.querySelectorAll('[data-key]')];for(const s of selects)s.onchange=()=>$('#apply').disabled=selects.some(x=>!x.value);
   p.reviews.forEach((r,i)=>{formatIdField($(`#link-${i}`));formatIdField($(`#new-id-${i}`));});
+  const reviewLabels={keep:'기존 유지',apply:'변경 적용',defer:'보류 · PC 검토',issue:'신규 실물번호 발급',link:'기존 실물 연결',confirm:'확인 후 반영',distinct:'다른 실물로 등록'};
+  const defaultReview=r=>r.kind==='unidentified'?'issue':r.kind==='similar'?'distinct':r.kind==='uncertain'?'defer':r.kind==='mapping'?'confirm':r.options.includes('apply')?'apply':r.options[0];
+  let reviewIndex=0;
+  $('#review').querySelectorAll('.conflict').forEach(x=>x.hidden=true);
+  $('#year').previousElementSibling.hidden=true;$('#year').hidden=true;
+  const controls=document.createElement('div');controls.className='actions';controls.innerHTML='<p id="review-progress" class="muted"></p><button id="review-resume" class="secondary" type="button">검토 계속</button>';$('#apply').parentElement.before(controls);
+  const progress=()=>{$('#review-progress').textContent='검토 '+Math.min(reviewIndex,p.reviews.length)+' / '+p.reviews.length+'건';};
+  function reviewAt(i){
+    reviewIndex=i;progress();if(dialog.open)dialog.close();
+    if(i>=p.reviews.length){$('#apply').disabled=false;$('#review-resume').textContent='처음부터 다시 검토';return;}
+    const r=p.reviews[i],e=p.entries.find(x=>x.physicalId===r.entryId||x.temporaryId===r.entryId||x.oldPhysicalId===r.entryId||x.oldPhysicalId===r.oldPhysicalId||x.physicalId===r.physicalId);
+    const old=state.physicalBooks.find(x=>x.physicalId===(e?.oldPhysicalId||e?.physicalId));
+    const select=$('#decision-'+i);if(!select.value)select.value=defaultReview(r);
+    dialog.innerHTML='<form id="review-form"><div class="eyebrow">검토 '+(i+1)+' / '+p.reviews.length+'</div><h2>'+esc(e?.titleCanonical||old?.titleCanonical||'도서명 확인 필요')+'</h2><p class="muted">'+esc(e?.publisherCanonical||old?.publisherCanonical||'출판사 미기재')+'</p><div class="review-context"><div><span>기존 번호</span><strong>'+esc(e?.oldPhysicalId||old?.physicalId||'없음')+'</strong></div><div><span>조사 번호</span><strong>'+esc(e?.physicalId||'번호 없음')+'</strong></div></div><p class="notice-inline">'+esc(r.message)+'</p>'+(r.candidates?.length?'<div class="review-candidates"><strong>중복 후보</strong>'+r.candidates.map(x=>'<p>'+esc(x.physicalId||x.legacyLedgerId||'')+' · '+esc(x.title||x.titleCanonical||x.titleRaw||'')+'</p>').join('')+'</div>':'')+'<label for="review-choice">처리 방법</label><select id="review-choice">'+r.options.map(o=>'<option value="'+o+'">'+(reviewLabels[o]||o)+'</option>').join('')+'</select><div id="review-extra"></div><div class="actions"><button type="button" id="review-stop" class="secondary">중단</button><button type="button" id="review-back" class="secondary" '+(i?'':'disabled')+'>이전</button><button type="submit" id="review-next">'+(i===p.reviews.length-1?'확인 완료':'확인 후 다음')+'</button></div></form>';
+    $('#review-choice').value=select.value;
+    const showExtra=()=>{
+      const choice=$('#review-choice').value,box=$('#review-extra');box.innerHTML='';
+      if(choice==='link'){box.innerHTML='<label for="review-link">연결할 기존 실물번호</label><input id="review-link" inputmode="numeric" required value="'+esc($('#link-'+i)?.value||'')+'">';formatIdField($('#review-link'));}
+      else if(r.kind==='id-change'&&choice==='apply'){box.innerHTML='<label for="review-new-id">최종 실물번호</label><input id="review-new-id" inputmode="numeric" required value="'+esc($('#new-id-'+i).value)+'">';formatIdField($('#review-new-id'));}
+      else if(r.kind==='unidentified'&&choice==='issue'){box.innerHTML='<label for="review-year">발급 연도</label><input id="review-year" type="number" min="2000" max="9999" required value="'+esc($('#year').value)+'"><p class="muted">반영할 때 이 연도의 다음 실물번호를 발급합니다.</p>';}
+    };
+    $('#review-choice').onchange=showExtra;showExtra();
+    click('#review-stop',()=>dialog.close());click('#review-back',()=>reviewAt(i-1));
+    $('#review-form').onsubmit=run(async event=>{
+      event.preventDefault();const choice=$('#review-choice').value;
+      if(choice==='link'){const id=normalizePhysicalId($('#review-link').value);if(!state.physicalBooks.some(x=>x.physicalId===id))throw Error('연결할 기존 실물번호를 확인하세요.');$('#link-'+i).value=id;}
+      if(r.kind==='id-change'&&choice==='apply'){const id=normalizePhysicalId($('#review-new-id').value),owner=state.physicalBooks.find(x=>x.physicalId===id);if(id===r.oldPhysicalId)throw Error('기존 번호와 다른 실물번호를 입력하세요.');if(owner)throw Error(id+'는 '+owner.titleCanonical+'에 이미 지정된 번호입니다.');$('#new-id-'+i).value=id;}
+      if(r.kind==='unidentified'&&choice==='issue')$('#year').value=$('#review-year').value;
+      select.value=choice;
+      const pair=p.reviews.findIndex(x=>x.entryId===r.entryId&&x.kind===(r.kind==='similar'?'unidentified':'similar'));
+      if(pair>=0){const other=$('#decision-'+pair);if(choice==='link'){other.value='link';$('#link-'+pair).value=$('#link-'+i).value;}else if(r.kind==='unidentified')other.value='distinct';else if(other.value==='link')other.value='issue';}
+      reviewAt(i+1);
+    });
+    dialog.showModal();$('#review-next').focus();
+  }
+  progress();click('#review-resume',()=>reviewAt(reviewIndex>=p.reviews.length?0:reviewIndex));
+  if(p.reviews.length)reviewAt(0);
   click('#recheck',inspect);
   click('#apply',async()=>{const decisions={};for(const [i,s] of selects.entries()){const review=p.reviews[i];decisions[s.dataset.key]=s.value;if(s.value==='link')decisions[`link:${review.entryId}`]=normalizePhysicalId($(`#link-${i}`).value);if(review.kind==='id-change'&&s.value==='apply')decisions[`new-id:${review.oldPhysicalId}`]=normalizePhysicalId($(`#new-id-${i}`).value);}const result=await api('/api/apply',{report,decisions,revision:p.revision,year:Number($('#year').value)});reportQueue.shift();report=null;await desktop();if(reportQueue.length)await showNextReport();else $('#review').innerHTML=`<section class="panel"><h2>반영 완료</h2>${result.mapping.map(x=>`<p>${esc(x.title)}: ${esc(x.oldPhysicalId||x.temporaryId)} → <strong>${esc(x.physicalId)}</strong></p>`).join('')}<button id="save-after-apply">결과 Excel 저장</button></section>`;click('#save-after-apply',saveExcel);notice('조사 결과를 반영했습니다.');});
 }
@@ -151,7 +188,49 @@ function renderMatches(){
   document.querySelectorAll('[data-existing]').forEach(el=>el.onclick=()=>entryDialog(false,survey.physicalBooks.find(x=>x.physicalId===el.dataset.existing)));
   document.querySelectorAll('[data-legacy]').forEach(el=>el.onclick=()=>entryDialog(false,null,survey.legacyRecords.find(x=>x.recordId===el.dataset.legacy)));
 }
-function renderEntries(){$('#entries').innerHTML=survey.entries.length?survey.entries.map(e=>`<div class="candidate"><strong>${esc(e.oldPhysicalId?`${e.oldPhysicalId} → ${e.physicalId}`:e.physicalId||e.temporaryId)}</strong> · ${esc(canonical(e.titleRaw))} · ${esc(e.publisherRaw)} <span class="tag ${e.status==='ACTIVE'?'ok':'warn'}">${esc(statusName(e.status))}</span>${e.action==='CHANGE_PHYSICAL_ID'?'<span class="muted">실물번호 변경 요청 · PC 확인 필요</span>':''}</div>`).join(''):'<p class="muted">기록이 없습니다.</p>';}
+function renderEntries(){
+  $('#entries').innerHTML=survey.entries.length?survey.entries.map((e,i)=>'<div class="candidate candidate-row"><div><strong>'+esc(e.oldPhysicalId?e.oldPhysicalId+' → '+e.physicalId:e.physicalId||e.temporaryId)+'</strong> · '+esc(canonical(e.titleRaw))+' · '+esc(e.publisherRaw)+' <span class="tag '+(e.status==='ACTIVE'?'ok':'warn')+'">'+esc(statusName(e.status))+'</span>'+(e.action==='CHANGE_PHYSICAL_ID'?'<span class="muted">실물번호 변경 요청 · PC 확인 필요</span>':'')+'</div><button type="button" class="secondary" data-edit-entry="'+i+'">수정</button></div>').join(''):'<p class="muted">기록이 없습니다.</p>';
+  document.querySelectorAll('[data-edit-entry]').forEach(el=>el.onclick=()=>editSurveyEntryDialog(Number(el.dataset.editEntry)));
+}
+function editSurveyEntryDialog(index){
+  const entry=survey.entries[index];if(!entry)return;
+  const acquisition=entry.action==='NEW_ACQUISITION';
+  const numbered=!!entry.physicalId;
+  dialog.innerHTML='<form id="edit-entry-form"><h2>조사 기록 수정</h2><p class="muted">'+esc(entry.oldPhysicalId?'기존 번호 '+entry.oldPhysicalId+' → 조사 번호 '+entry.physicalId:entry.temporaryId||entry.physicalId)+'</p>'+
+    (numbered?'<label for="edit-entry-id">실물번호</label><input id="edit-entry-id" name="physicalId" inputmode="numeric" maxlength="9" required value="'+esc(entry.physicalId)+'" '+(acquisition?'readonly':'')+'>':'<div class="read-value">번호 없는 책 · PC에서 번호 발급</div>')+
+    (acquisition?'<label for="edit-entry-date">입수일</label><input id="edit-entry-date" name="acquiredDateRaw" type="date" required value="'+esc(entry.acquiredDateRaw)+'">':'')+
+    '<label for="edit-entry-title">도서명</label><input id="edit-entry-title" name="titleRaw" required autocomplete="off" value="'+esc(entry.titleRaw)+'">'+
+    '<label for="edit-entry-publisher">출판사</label><input id="edit-entry-publisher" name="publisherRaw" autocomplete="off" value="'+esc(entry.publisherRaw)+'">'+
+    '<label for="edit-entry-volume">권 번호 (알고 있는 경우)</label><input id="edit-entry-volume" name="volume" value="'+esc(entry.volume||'')+'">'+
+    (acquisition?'':'<label for="edit-entry-status">실물 상태</label><select id="edit-entry-status" name="status">'+['ACTIVE','DISCARDED','LOST','UNKNOWN'].map(s=>'<option value="'+s+'" '+(s===entry.status?'selected':'')+'>'+statusName(s)+'</option>').join('')+'</select>')+
+    (acquisition?'':'<label for="edit-entry-legacy">과거 장부 연결</label><select id="edit-entry-legacy" name="legacyRecordId"><option value="">연결하지 않음</option>'+survey.legacyRecords.map(x=>'<option value="'+esc(x.recordId)+'" '+(x.recordId===entry.legacyRecordId?'selected':'')+'>'+esc(label(x))+'</option>').join('')+'</select>')+
+    '<label for="edit-entry-note">조사 메모</label><input id="edit-entry-note" name="note" value="'+esc(entry.note||'')+'">'+
+    '<div class="actions"><button type="button" id="edit-entry-cancel" class="secondary">취소</button><button type="submit">수정 저장</button></div></form>';
+  click('#edit-entry-cancel',()=>dialog.close());formatIdField($('#edit-entry-id'));
+  $('#edit-entry-form').onsubmit=run(async event=>{
+    event.preventDefault();const f=new FormData(event.target),next=structuredClone(survey),updated=next.entries[index];
+    const id=numbered?normalizePhysicalId(f.get('physicalId')):null;
+    if(id&&id!==entry.physicalId){
+      const owner=survey.physicalBooks.find(x=>x.physicalId===id&&x.physicalId!==entry.oldPhysicalId);
+      const pending=survey.entries.some((x,i)=>i!==index&&x.physicalId===id);
+      if(owner||pending||survey.issuedIds?.includes(id))throw Error(id+'는 이미 다른 책에 지정되었거나 발급된 번호입니다.');
+      if(entry.isNew&&!updated.originalPhysicalId)updated.originalPhysicalId=entry.physicalId;
+      if(!entry.isNew&&!entry.oldPhysicalId)updated.oldPhysicalId=entry.physicalId;
+      if(!entry.isNew&&id===updated.oldPhysicalId)throw Error('기존 번호와 다른 새 번호를 입력하세요.');
+      if(!entry.isNew)updated.action='CHANGE_PHYSICAL_ID';
+      updated.physicalId=id;
+    }
+    updated.titleRaw=String(f.get('titleRaw')).trim();updated.publisherRaw=String(f.get('publisherRaw')).trim();
+    updated.volume=String(f.get('volume')||'').trim();updated.note=String(f.get('note')||'').trim();
+    if(!updated.titleRaw)throw Error('도서명을 입력하세요.');
+    if(acquisition){updated.acquiredDateRaw=String(f.get('acquiredDateRaw'));if(!updated.acquiredDateRaw)throw Error('입수일을 입력하세요.');}
+    else {updated.status=String(f.get('status'));updated.legacyRecordId=String(f.get('legacyRecordId')||'')||null;}
+    const original=survey.physicalBooks.find(x=>x.physicalId===(updated.oldPhysicalId||entry.physicalId));
+    if(original&&!updated.oldPhysicalId&&updated.action==='CONFIRM'&&(canonical(updated.titleRaw)!==original.titleCanonical||canonical(updated.publisherRaw)!==original.publisherCanonical||updated.volume!==(original.volume||'')))updated.action='UPDATE_INFO';
+    updated.recordedAt=new Date().toISOString();next.savedAt=updated.recordedAt;saveSurvey(next);dialog.close();mobileRender();notice('조사 기록을 수정했습니다.');
+  });
+  dialog.showModal();dialog.tabIndex=-1;dialog.focus();
+}
 function mobileAcquisitionDialog(){
   const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Seoul'});
   const publishers=survey.publishers||publisherDictionary(survey.legacyRecords,survey.physicalBooks);
