@@ -6,7 +6,7 @@ const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 export async function makeInventoryExcel(db,file){
   const linked=new Set(db.physicalBooks.map(b=>b.legacyRecordId).filter(Boolean));
   const rows=[
-    ...db.physicalBooks.map(b=>{const legacy=db.legacyRecords.find(x=>x.recordId===b.legacyRecordId);return [b.physicalId,b.acquiredDateRaw||legacy?.registeredDateRaw||'',b.titleCanonical,b.volume||'',b.publisherCanonical,b.noteRaw||legacy?.noteRaw||'',statusName(b.status)];}),
+    ...db.physicalBooks.map(b=>{const legacy=db.legacyRecords.find(x=>x.recordId===b.legacyRecordId);return [b.physicalId,b.acquiredDateRaw||legacy?.registeredDateRaw||'',b.titleCanonical,b.volume||'',b.publisherCanonical,b.noteRawOverride?(b.noteRaw||''):legacy?.noteRawEdited?(legacy.noteRaw||''):(b.noteRaw||legacy?.noteRaw||''),statusName(b.status)];}),
     ...db.legacyRecords.filter(b=>!linked.has(b.recordId)).map(b=>[b.legacyLedgerId,b.registeredDateRaw||'',b.titleCanonical,b.volume||'',b.publisherCanonical,b.noteRaw||'',statusName('UNKNOWN')])
   ];
   const standard=id=>/^\d{4}-\d{4}$/.test(id);

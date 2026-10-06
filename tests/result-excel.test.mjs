@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {emptyDb,addLegacy,createSession,inspectSurvey,applySurvey,importResultExcel} from '../inventory.mjs';
+import {emptyDb,addLegacy,createSession,inspectSurvey,applySurvey,importResultExcel,editPhysicalBook,editLegacyNote} from '../inventory.mjs';
 import {makeInventoryExcel} from '../inventory-excel.mjs';
 import {readResultExcel} from '../result-excel-import.mjs';
 import {unzip,zip,sheet} from '../xlsx-native.mjs';
@@ -67,6 +67,37 @@ test('결과 Excel은 미확인 도서를 포함하고 날짜·정렬·권 번�
     assert.equal(withSource.next.physicalBooks[0].legacyRecordId,withSource.next.legacyRecords[0].recordId);
     assert.throws(()=>importResultExcel(restored.next,rows.map(x=>x.physicalId==='2026-0050'?{...x,volume:'4'}:x)),/권 번호와 다릅니다/);
     assert.throws(()=>importResultExcel(restored.next,rows.map(x=>x.physicalId==='2026-0050'?{...x,titleRaw:'다른 책'}:x)),/내용이 다릅니다/);
+  }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+
+
+test('PC에서 장부·실물 비고를 수정하거나 비워도 Excel과 재조사에 반영된다',async()=>{
+  const db=source(),legacy=db.legacyRecords[0];
+  db.physicalBooks.push({physicalId:'2026-0050',legacyRecordId:legacy.recordId,
+    titleRaw:'연결된 책',titleCanonical:'연결된 책',publisherRaw:'출판사',publisherCanonical:'출판사',
+    acquiredDateRaw:'2009.04.28.',volume:'1',status:'ACTIVE',labelStatus:'PRESENT',version:1,noteRaw:'후원사 A'});
+  db.issuedIds.push('2026-0050');
+  const changed=editLegacyNote(db,legacy.recordId,'기업 C',1);
+  assert.equal(changed.legacyRecords[0].noteRaw,'기업 C');
+  assert.throws(()=>editLegacyNote(changed,legacy.recordId,'오래된 수정',1),/다른 작업/);
+  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'angela-note-'));
+  try{
+    const file=path.join(folder,'notes.xlsx');
+    await makeInventoryExcel(changed,file);
+    assert.equal(readResultExcel(await fs.readFile(file)).find(x=>x.physicalId==='2026-0050').noteRaw,'기업 C');
+    const cleared=editLegacyNote(changed,legacy.recordId,'',2);
+    await makeInventoryExcel(cleared,file);
+    assert.equal(readResultExcel(await fs.readFile(file)).find(x=>x.physicalId==='2026-0050').noteRaw,'');
+    const edited=editPhysicalBook(cleared,'2026-0050',{physicalId:'2026-0050',titleRaw:'연결된 책',publisherRaw:'출판사',acquiredDateRaw:'2009.04.28.',volume:'1',status:'ACTIVE',noteRaw:'개별 후원사',version:1});
+    await makeInventoryExcel(edited,file);
+    assert.equal(readResultExcel(await fs.readFile(file)).find(x=>x.physicalId==='2026-0050').noteRaw,'개별 후원사');
+    const empty=editPhysicalBook(edited,'2026-0050',{physicalId:'2026-0050',titleRaw:'연결된 책',publisherRaw:'출판사',acquiredDateRaw:'2009.04.28.',volume:'1',status:'ACTIVE',noteRaw:'',version:2});
+    const session=createSession(empty);empty.sessions.push(session);
+    const report={schema:'angela-survey/v2',catalogId:empty.catalogId,sessionId:session.id,entries:[{physicalId:'2026-0050',temporaryId:null,isNew:false,action:'CONFIRM',titleRaw:'연결된 책',publisherRaw:'출판사',volume:'1',legacyRecordId:legacy.recordId,status:'ACTIVE',labelStatus:'PRESENT',note:''}]};
+    const preview=inspectSurvey(empty,report),decisions=Object.fromEntries(preview.reviews.map(r=>[r.key,r.kind==='mapping'?'confirm':r.options[0]]));
+    const merged=applySurvey(empty,report,decisions,preview.revision,2026).next;
+    await makeInventoryExcel(merged,file);
+    assert.equal(readResultExcel(await fs.readFile(file)).find(x=>x.physicalId==='2026-0050').noteRaw,'');
   }finally{await fs.rm(folder,{recursive:true,force:true});}
 });
 

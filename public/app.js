@@ -34,6 +34,7 @@ async function saveExcel(){
   }else{const link=document.createElement('a'),url=URL.createObjectURL(blob);link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),60000);notice('브라우저 다운로드 폴더에 결과 Excel을 저장했습니다.');}
 }
 const label=b=>`${b.physicalId||b.legacyLedgerId||b.temporaryId||''} · ${b.titleCanonical||b.titleRaw||''} · ${b.publisherCanonical||''}`;
+const physicalNote=b=>{const legacy=state.legacyRecords.find(x=>x.recordId===b.legacyRecordId);return b.noteRawOverride?(b.noteRaw||''):legacy?.noteRawEdited?(legacy.noteRaw||''):(b.noteRaw||legacy?.noteRaw||'');};
 function candidateList(items,type){return items.map(x=>`<div class="candidate"><strong>${esc(label(x))}</strong> <span class="muted">${type}${x.matchScore?` · 관련도 ${x.matchScore}`:''}</span></div>`).join('');}
 
 async function desktop(){
@@ -75,10 +76,18 @@ async function showNextReport(){
 function renderDesktopLists(){
   const physical=search($('#pc-search').value,state.physicalBooks,100);
   const books=$('#pc-search').value?physical:state.physicalBooks;
-  $('#physical-list').innerHTML=books.length?books.map(b=>`<div class="candidate"><strong>${esc(b.physicalId)}</strong> · ${esc(b.titleCanonical)}${b.volume?' · 권 번호: '+esc(b.volume):''} · ${esc(b.publisherCanonical)} <span class="tag ${b.status==='ACTIVE'?'ok':'warn'}">${esc(statusName(b.status))}</span><button class="secondary" data-edit-book>편집</button><div class="muted">장부 연결: ${esc(state.legacyRecords.find(x=>x.recordId===b.legacyRecordId)?.legacyLedgerId||'없음')} · 번호표: ${esc(b.labelStatus)} · 상태 이력 ${(state.statusHistory||[]).filter(x=>x.physicalId===b.physicalId).length}건</div></div>`).join(''):'<p class="muted">등록된 실물이 없습니다.</p>';
+  $('#physical-list').innerHTML=books.length?books.map(b=>`<div class="candidate"><strong>${esc(b.physicalId)}</strong> · ${esc(b.titleCanonical)}${b.volume?' · 권 번호: '+esc(b.volume):''} · ${esc(b.publisherCanonical)} <span class="tag ${b.status==='ACTIVE'?'ok':'warn'}">${esc(statusName(b.status))}</span><button class="secondary" data-edit-book>편집</button><div class="muted">장부 연결: ${esc(state.legacyRecords.find(x=>x.recordId===b.legacyRecordId)?.legacyLedgerId||'없음')} · 번호표: ${esc(b.labelStatus)} · 상태 이력 ${(state.statusHistory||[]).filter(x=>x.physicalId===b.physicalId).length}건 · 비고: ${esc(physicalNote(b)||'없음')}</div></div>`).join(''):'<p class="muted">등록된 실물이 없습니다.</p>';
   document.querySelectorAll('[data-edit-book]').forEach(el=>el.onclick=()=>pcEditDialog(el.parentElement.querySelector('strong').textContent));
   const legacy=$('#legacy-search').value?search($('#legacy-search').value,state.legacyRecords,100):state.legacyRecords;
-  $('#legacy-list').innerHTML=legacy.length?legacy.slice(0,100).map(x=>`<div class="candidate"><strong>${esc(x.legacyLedgerId)}</strong> · ${esc(x.titleCanonical)} · ${esc(x.publisherCanonical)}<div class="muted">${esc(x.sourceSheet)} ${x.sourceRow}행 · 원본 권수 ${esc(x.quantityRaw)} · 비고 ${esc(x.noteRaw)}</div></div>`).join(''):'<p class="muted">원장 항목이 없습니다.</p>';
+  $('#legacy-list').innerHTML=legacy.length?legacy.slice(0,100).map(x=>`<div class="candidate"><strong>${esc(x.legacyLedgerId)}</strong> · ${esc(x.titleCanonical)} · ${esc(x.publisherCanonical)}<div class="muted">${esc(x.sourceSheet)} ${x.sourceRow}행 · 원본 권수 ${esc(x.quantityRaw)} · 비고 ${esc(x.noteRaw||'없음')}</div><button type="button" class="secondary" data-legacy-note="${esc(x.recordId)}">비고 수정</button></div>`).join(''):'<p class="muted">원장 항목이 없습니다.</p>';
+  document.querySelectorAll('[data-legacy-note]').forEach(el=>el.onclick=()=>pcLegacyNoteDialog(el.dataset.legacyNote));
+}
+function pcLegacyNoteDialog(recordId){
+  const record=state.legacyRecords.find(x=>x.recordId===recordId);if(!record)throw Error('과거 장부 항목을 찾을 수 없습니다.');
+  dialog.innerHTML='<form id="pc-legacy-note-form"><h2>과거 장부 비고 수정</h2><p class="muted">'+esc(label(record))+'</p><label for="pc-legacy-note">비고 · 후원사/기업 기록</label><textarea id="pc-legacy-note" name="noteRaw" rows="4" maxlength="2000">'+esc(record.noteRaw||'')+'</textarea><div class="actions"><button type="button" id="pc-legacy-note-cancel" class="secondary">취소</button><button type="submit">비고 저장</button></div></form>';
+  click('#pc-legacy-note-cancel',()=>dialog.close());
+  $('#pc-legacy-note-form').onsubmit=run(async event=>{event.preventDefault();await api('/api/legacy/note',{recordId,version:record.version,noteRaw:$('#pc-legacy-note').value});dialog.close();await desktop();notice('과거 장부 비고를 저장했습니다.');});
+  dialog.showModal();
 }
 function pcAcquisitionDialog(){
   const today=new Date().toLocaleDateString('sv-SE',{timeZone:'Asia/Seoul'});
@@ -104,6 +113,7 @@ function pcEditDialog(id){
     '<label for="pc-edit-title">도서명</label><input id="pc-edit-title" name="titleRaw" required autocomplete="off" value="'+esc(book.titleRaw)+'">'+
     '<label for="pc-edit-volume">권 번호</label><input id="pc-edit-volume" name="volume" value="'+esc(book.volume||'')+'">'+
     '<label for="pc-edit-publisher">출판사</label><input id="pc-edit-publisher" name="publisherRaw" required value="'+esc(book.publisherRaw)+'">'+
+    '<label for="pc-edit-note">비고 · 후원사/기업 기록</label><textarea id="pc-edit-note" name="noteRaw" rows="4" maxlength="2000">'+esc(physicalNote(book))+'</textarea>'+
     '<label>매수</label><div class="read-value">1권 · 한 행이 실물 한 권입니다.</div>'+
     '<label for="pc-edit-status">실물 상태</label><select id="pc-edit-status" name="status">'+['ACTIVE','DISCARDED','LOST','UNKNOWN'].map(x=>'<option value="'+x+'"'+(x===book.status?' selected':'')+'>'+statusName(x)+'</option>').join('')+'</select>'+
     '<div class="actions"><button type="button" id="pc-edit-cancel" class="secondary">취소</button><button type="submit">변경 저장</button></div></form>';

@@ -202,13 +202,23 @@ export function editPhysicalBook(db,oldPhysicalId,input){
   insist(['ACTIVE','DISCARDED','LOST','UNKNOWN'].includes(input.status),'실물 상태가 올바르지 않습니다.');
   const date=String(input.acquiredDateRaw||'').trim();
   insist(!date||/^\d{4}[-.]\d{2}[-.]\d{2}\.?$/.test(date),'입수일 형식을 확인하세요.');
-  const stamp=now(),row={...old,physicalId:id,...clean('title',input.titleRaw),...publisherFields(next,input.publisherRaw),acquiredDateRaw:date,volume:canonical(input.volume??old.volume??''),status:input.status,quantity:1,version:old.version+1,updatedAt:stamp,discardedAt:input.status==='DISCARDED'?(old.discardedAt||stamp):null};
+  const noteChanged=Object.hasOwn(input,'noteRaw');
+  if(noteChanged)insist(String(input.noteRaw??'').length<=2000,'비고는 2000자 이하로 입력하세요.');
+  const stamp=now(),row={...old,...(noteChanged?{noteRaw:String(input.noteRaw??'').trim(),noteRawOverride:true}:{}),physicalId:id,...clean('title',input.titleRaw),...publisherFields(next,input.publisherRaw),acquiredDateRaw:date,volume:canonical(input.volume??old.volume??''),status:input.status,quantity:1,version:old.version+1,updatedAt:stamp,discardedAt:input.status==='DISCARDED'?(old.discardedAt||stamp):null};
   next.physicalBooks[index]=row;
   if(!next.issuedIds.includes(oldId))next.issuedIds.push(oldId);
   if(id!==oldId){next.issuedIds.push(id);next.idChanges=[...(next.idChanges||[]),{oldPhysicalId:oldId,newPhysicalId:id,sessionId:null,at:stamp}];}
   if(old.status!==row.status)next.statusHistory.push({physicalId:id,from:old.status,to:row.status,at:stamp,sessionId:null});
   if(row.status==='DISCARDED'&&old.status!=='DISCARDED')next.disposals.push({physicalId:id,legacyRecordId:row.legacyRecordId,title:row.titleCanonical,at:stamp,note:'PC에서 상태 수정',sessionId:null});
   next.revision++;
+  return next;
+}
+export function editLegacyNote(db,recordId,noteRaw,version){
+  const next=structuredClone(db),record=next.legacyRecords.find(x=>x.recordId===recordId);
+  insist(record,'수정할 과거 장부 항목을 찾을 수 없습니다.');
+  insist(Number(version)===record.version,'다른 작업에서 장부가 변경되었습니다. 목록을 새로 확인하세요.');
+  insist(String(noteRaw??'').length<=2000,'비고는 2000자 이하로 입력하세요.');
+  record.noteRaw=String(noteRaw??'').trim();record.noteRawEdited=true;record.version++;next.revision++;
   return next;
 }
 function applyIdChange(next,e,newId,sessionId){
@@ -282,7 +292,7 @@ export function applySurvey(db,report,decisions,revision,year) {
     const row={physicalId:id,temporaryId:null,legacyRecordId:e.legacyRecordId||null,...clean('title',keepInfo?old.titleRaw:e.titleRaw),...publisherFields(next,keepInfo?old.publisherRaw:e.publisherRaw),
       volume:keepInfo?old.volume:e.volume,status:e.status,labelStatus:e.labelStatus,note:e.note,acquiredDateRaw:old?.acquiredDateRaw||e.acquiredDateRaw||legacy?.registeredDateRaw||'',version:(old?.version||0)+1,
       createdAt:old?.createdAt||now(),updatedAt:now(),discardedAt:e.status==='DISCARDED'?(old?.discardedAt||now()):null,
-      authorRaw:e.authorRaw||'',locationRaw:e.locationRaw||''};
+      authorRaw:e.authorRaw||'',locationRaw:e.locationRaw||'',...(old?{noteRaw:old.noteRaw,noteRawOverride:old.noteRawOverride}:{})};
     if(linked&&old){Object.assign(row,{legacyRecordId:e.legacyRecordId||old.legacyRecordId,titleRaw:old.titleRaw,titleCanonical:old.titleCanonical,titleSearch:old.titleSearch,publisherRaw:old.publisherRaw,publisherCanonical:old.publisherCanonical,publisherSearch:old.publisherSearch,volume:old.volume,authorRaw:old.authorRaw,locationRaw:old.locationRaw,status:e.status==='UNKNOWN'?old.status:e.status});}
     if(old)next.physicalBooks[next.physicalBooks.indexOf(old)]=row;else next.physicalBooks.push(row);
     if(!old&&e.originalPhysicalId&&e.originalPhysicalId!==id)mapping.push({oldPhysicalId:e.originalPhysicalId,physicalId:id,title:e.titleCanonical});
@@ -324,7 +334,7 @@ export function resolveReview(db,reviewId,mode,physicalId,year,status){
     const row={physicalId:id,temporaryId:null,legacyRecordId:e.legacyRecordId||old?.legacyRecordId||null,...clean('title',e.titleRaw),...publisherFields(next,e.publisherRaw),
       volume:e.volume||'',status:status||e.status,labelStatus:e.labelStatus,note:e.note||'',acquiredDateRaw:old?.acquiredDateRaw||e.acquiredDateRaw||legacy?.registeredDateRaw||'',version:(old?.version||0)+1,
       createdAt:old?.createdAt||now(),updatedAt:now(),discardedAt:(status||e.status)==='DISCARDED'?(old?.discardedAt||now()):null,
-      authorRaw:e.authorRaw||'',locationRaw:e.locationRaw||''};
+      authorRaw:e.authorRaw||'',locationRaw:e.locationRaw||'',...(old?{noteRaw:old.noteRaw,noteRawOverride:old.noteRawOverride}:{})};
     if(mode==='link'&&old){Object.assign(row,{titleRaw:old.titleRaw,titleCanonical:old.titleCanonical,titleSearch:old.titleSearch,publisherRaw:old.publisherRaw,publisherCanonical:old.publisherCanonical,publisherSearch:old.publisherSearch,volume:old.volume,authorRaw:old.authorRaw,locationRaw:old.locationRaw});}
     if(old)next.physicalBooks[next.physicalBooks.indexOf(old)]=row;else next.physicalBooks.push(row);
     if(!old&&e.originalPhysicalId&&e.originalPhysicalId!==id)mapping.push({oldPhysicalId:e.originalPhysicalId,physicalId:id,title:e.titleCanonical});
@@ -363,7 +373,7 @@ export function importResultExcel(db,rows){
         insist(legacy.titleCanonical===title,'기존 장부의 도서명과 다릅니다: '+id);
         insist(!volume||!legacy.volume||legacy.volume===volume,'기존 장부의 권 번호와 다릅니다: '+id);
         if(!legacy.registeredDateRaw&&date){legacy.registeredDateRaw=date;filledDates++;}
-        if(noteRaw&&!legacy.noteRaw){legacy.noteRaw=noteRaw;filledNotes++;}
+        if(noteRaw&&!legacy.noteRaw&&!legacy.noteRawEdited){legacy.noteRaw=noteRaw;filledNotes++;}
         if(volume&&!legacy.volume){legacy.volume=volume;filledVolumes++;}
         unchanged++;continue;
       }
@@ -377,7 +387,7 @@ export function importResultExcel(db,rows){
     if(physical){
       const currentDate=physical.acquiredDateRaw||next.legacyRecords.find(x=>x.recordId===physical.legacyRecordId)?.registeredDateRaw||'';
       insist(physical.titleCanonical===title&&physical.publisherCanonical===publisher&&physical.status===status&&currentDate===date,'기존 실물과 내용이 다릅니다: '+id+' · PC 실물 편집이나 조사 반영에서 수정하세요.');
-      if(noteRaw&&!physical.noteRaw){physical.noteRaw=noteRaw;filledNotes++;}
+      if(noteRaw&&!physical.noteRaw&&!physical.noteRawOverride){physical.noteRaw=noteRaw;filledNotes++;}
       insist(!volume||!physical.volume||physical.volume===volume,'기존 실물의 권 번호와 다릅니다: '+id);
       if(volume&&!physical.volume){physical.volume=volume;filledVolumes++;}
       unchanged++;continue;

@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview,addNewAcquisition,editPhysicalBook,importResultExcel} from './inventory.mjs';
+import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview,addNewAcquisition,editPhysicalBook,editLegacyNote,importResultExcel} from './inventory.mjs';
 import {readExcelUpload} from './excel-upload.mjs';
 import {makeInventoryExcel} from './inventory-excel.mjs';
 import {readResultExcel} from './result-excel-import.mjs';
@@ -76,6 +76,7 @@ async function handle(req,res){
   if(p==='/api/review/resolve'){const {next,physicalId}=resolveReview(db,body.reviewId,body.mode,body.physicalId,body.year,body.status);await save(next);return json({physicalId});}
   if(p==='/api/physical/add'){const {next,ids}=addNewAcquisition(db,body);await save(next);return json({ids});}
   if(p==='/api/physical/edit'){await save(editPhysicalBook(db,body.oldPhysicalId,body));return json({ok:true});}
+  if(p==='/api/legacy/note'){await save(editLegacyNote(db,body.recordId,body.noteRaw,body.version));return json({ok:true});}
   if(p==='/api/review/legacy'){await save(resolveLegacyReview(db,body.recordId));return json({ok:true});}
   throw Error('지원하지 않는 요청입니다.');
 }
