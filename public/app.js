@@ -40,7 +40,7 @@ async function desktop(){
   state=await api('/api/state');const latest=state.sessions.filter(x=>!x.legacyFormat).at(-1);
   if(latest)$('#mobile-nav').href=`/mobile?session=${latest.id}`;
   app.innerHTML=`<div class="lead"><div><div class="eyebrow">LIBRARY INVENTORY</div><h1>도서 실물조사</h1><p class="muted">과거 장부 ${state.legacyRecords.length}행 · 확인한 실물 ${state.physicalBooks.length}권</p></div><button id="export-excel" class="secondary">결과 Excel 저장</button></div>
-    <div class="steps"><section class="panel"><span class="step-number">01 / 원장</span><h2>과거 Excel 가져오기</h2><label for="excel">Excel 파일 열기</label><input id="excel" type="file" accept=".xls,.xlsx" ${state.legacyRecords.length?'disabled':''}><p class="muted">.xls는 PC에 Microsoft Excel이 필요합니다. 제목이 있는 행을 시트명·행 번호와 함께 보존합니다.</p><label for="result-excel">결과 Excel 가져오기</label><input id="result-excel" type="file" accept=".xlsx"><p class="muted">이 프로그램에서 저장한 결과 Excel을 불러옵니다. 기존 번호와 내용이 충돌하면 원장을 바꾸지 않고 오류를 표시합니다.</p></section>
+    <div class="steps"><section class="panel"><span class="step-number">01 / 원장</span><h2>과거 Excel 가져오기</h2><label for="excel">Excel 파일 열기</label><input id="excel" type="file" accept=".xls,.xlsx" ${state.legacyRecords.length?'disabled':''}><p class="muted">.xls는 PC에 Microsoft Excel이 필요합니다. 제목이 있는 행을 시트명·행 번호와 함께 보존합니다.</p><button id="reset-catalog" class="secondary" ${state.legacyRecords.length||state.physicalBooks.length?'':'disabled'}>원장 초기화</button><label for="result-excel">결과 Excel 가져오기</label><input id="result-excel" type="file" accept=".xlsx"><p class="muted">이 프로그램에서 저장한 결과 Excel을 불러옵니다. 기존 번호와 내용이 충돌하면 원장을 바꾸지 않고 오류를 표시합니다.</p></section>
     <section class="panel"><span class="step-number">02 / 조사</span><h2>조사 시작</h2><input id="worker" placeholder="작업자"><input id="area" placeholder="조사 구역" style="margin-top:8px"><button id="create" style="margin-top:12px" ${!state.legacyRecords.length&&!state.physicalBooks.length?'disabled':''}>조사용 데이터 생성</button>${latest?`<button id="package" class="secondary">Android 앱용 조사 파일 다운로드</button>`:''}<a class="session-link" href="/api/android-app">Android 현장조사 앱 다운로드</a></section>
     <section class="panel"><span class="step-number">03 / 병합</span><h2>조사 결과 반영</h2><label for="json">조사 결과 불러오기</label><input id="json" type="file" accept=".json" multiple><p class="muted">여러 결과 파일을 함께 선택할 수 있습니다. 파일마다 충돌과 검토 항목을 결정합니다.</p></section></div>
     <section id="review"></section><section class="panel"><h2>검토 필요 <span class="tag warn">${state.reviewQueue.length+state.legacyRecords.filter(x=>x.reviewRequired).length}건</span></h2><div id="queue"></div></section>
@@ -53,11 +53,18 @@ async function desktop(){
   document.querySelectorAll('[data-quality]').forEach(el=>el.onclick=run(async()=>{await api('/api/review/legacy',{recordId:quality[Number(el.dataset.quality)].recordId});await desktop();notice('장부 원문 검토를 기록했습니다.');}));
   renderDesktopLists();click('#pc-add',pcAcquisitionDialog);$('#pc-search').oninput=renderDesktopLists;$('#legacy-search').oninput=renderDesktopLists;
   click('#export-excel',saveExcel);
+  click('#reset-catalog',resetCatalogDialog);
   $('#excel').onchange=run(async e=>{const f=e.target.files[0];if(!f)return;const result=await api('/api/excel',await f.arrayBuffer(),true);await desktop();notice(`${result.count}개의 장부 행을 원문과 함께 보존했습니다.`);});
   $('#result-excel').onchange=run(async e=>{const f=e.target.files[0];if(!f)return;const result=await api('/api/result-excel',await f.arrayBuffer(),true);await desktop();notice(`결과 Excel을 불러왔습니다. 실물 ${result.addedPhysical}권, 미확인 장부 ${result.addedLegacy}행 추가 · 기존 ${result.unchanged}행 유지`);});
   click('#create',async()=>{await api('/api/session',{worker:$('#worker').value,area:$('#area').value});await desktop();notice('조사용 데이터를 생성했습니다.');});
   click('#package',()=>download(latest,`survey-package-${latest.id}.json`));
   $('#json').onchange=run(async e=>{const files=[...e.target.files];if(!files.length)return;reportQueue=await Promise.all(files.map(async file=>({name:file.name,value:JSON.parse(await file.text())})));await showNextReport();});
+}
+function resetCatalogDialog(){
+  dialog.innerHTML='<form id="reset-form"><h2>원장 초기화</h2><p>과거 장부 '+state.legacyRecords.length+'행과 실물 '+state.physicalBooks.length+'권, 조사 기록을 모두 초기화합니다. 현재 원장은 PC 데이터 폴더에 자동 백업합니다.</p><label for="reset-word">확인을 위해 초기화 입력</label><input id="reset-word" autocomplete="off" required><div class="actions"><button type="button" id="reset-cancel" class="secondary">취소</button><button type="submit">백업 후 초기화</button></div></form>';
+  click('#reset-cancel',()=>dialog.close());
+  $('#reset-form').onsubmit=run(async event=>{event.preventDefault();if($('#reset-word').value.trim()!=='초기화')throw Error('초기화를 정확히 입력하세요.');const result=await api('/api/reset',{revision:state.revision});dialog.close();await desktop();notice('원장을 초기화했습니다. 백업: '+result.dataDirectory+'\\'+result.backup);});
+  dialog.showModal();
 }
 async function showNextReport(){
   const item=reportQueue[0];report=item?.value||null;
@@ -205,7 +212,6 @@ function editSurveyEntryDialog(index){
     '<label for="edit-entry-volume">권 번호 (알고 있는 경우)</label><input id="edit-entry-volume" name="volume" value="'+esc(entry.volume||'')+'">'+
     (acquisition?'':'<label for="edit-entry-status">실물 상태</label><select id="edit-entry-status" name="status">'+['ACTIVE','DISCARDED','LOST','UNKNOWN'].map(s=>'<option value="'+s+'" '+(s===entry.status?'selected':'')+'>'+statusName(s)+'</option>').join('')+'</select>')+
     (acquisition?'':'<label for="edit-entry-legacy">과거 장부 연결</label><select id="edit-entry-legacy" name="legacyRecordId"><option value="">연결하지 않음</option>'+survey.legacyRecords.map(x=>'<option value="'+esc(x.recordId)+'" '+(x.recordId===entry.legacyRecordId?'selected':'')+'>'+esc(label(x))+'</option>').join('')+'</select>')+
-    '<label for="edit-entry-note">조사 메모</label><input id="edit-entry-note" name="note" value="'+esc(entry.note||'')+'">'+
     '<div class="actions"><button type="button" id="edit-entry-cancel" class="secondary">취소</button><button type="submit">수정 저장</button></div></form>';
   click('#edit-entry-cancel',()=>dialog.close());formatIdField($('#edit-entry-id'));
   $('#edit-entry-form').onsubmit=run(async event=>{
@@ -222,7 +228,7 @@ function editSurveyEntryDialog(index){
       updated.physicalId=id;
     }
     updated.titleRaw=String(f.get('titleRaw')).trim();updated.publisherRaw=String(f.get('publisherRaw')).trim();
-    updated.volume=String(f.get('volume')||'').trim();updated.note=String(f.get('note')||'').trim();
+    updated.volume=String(f.get('volume')||'').trim();
     if(!updated.titleRaw)throw Error('도서명을 입력하세요.');
     if(acquisition){updated.acquiredDateRaw=String(f.get('acquiredDateRaw'));if(!updated.acquiredDateRaw)throw Error('입수일을 입력하세요.');}
     else {updated.status=String(f.get('status'));updated.legacyRecordId=String(f.get('legacyRecordId')||'')||null;}
@@ -251,7 +257,7 @@ function mobileAcquisitionDialog(){
     event.preventDefault();const f=new FormData(event.target),date=String(f.get('acquiredDateRaw')),title=String(f.get('titleRaw')).trim(),publisher=String(f.get('publisherRaw')).trim(),year=Number(f.get('year')),quantity=Number(f.get('quantity'));
     if(!title||!publisher||!date)throw Error('입수일, 도서명, 출판사를 입력하세요.');
     const ids=reserveNextPhysicalIds(survey,year,quantity),next=structuredClone(survey),stamp=new Date().toISOString();
-    for(const id of ids)next.entries.push({action:'NEW_ACQUISITION',issuedYear:year,physicalId:id,temporaryId:null,isNew:true,titleRaw:title,publisherRaw:publisher,volume:'',acquiredDateRaw:date,legacyRecordId:null,status:'ACTIVE',labelStatus:'MISSING',note:'새로 들여온 책',recordedAt:stamp,candidateChoice:'distinct'});
+    for(const id of ids)next.entries.push({action:'NEW_ACQUISITION',issuedYear:year,physicalId:id,temporaryId:null,isNew:true,titleRaw:title,publisherRaw:publisher,volume:'',acquiredDateRaw:date,legacyRecordId:null,status:'ACTIVE',labelStatus:'MISSING',note:'',recordedAt:stamp,candidateChoice:'distinct'});
     next.savedAt=stamp;saveSurvey(next);dialog.close();mobileRender();notice(quantity+'권을 조사 기록에 저장했습니다.');
   });
   dialog.showModal();dialog.tabIndex=-1;dialog.focus();
@@ -276,7 +282,6 @@ function entryDialog(noLabel=false,existing=null,legacy=null,options={}){
     <label>입수일 · 조회 전용</label><div class="read-value">${esc(existing?.acquiredDateRaw||legacy?.registeredDateRaw||'기록 없음')}</div>
     <label for="legacy">과거 장부 연결</label><select id="legacy" name="legacyRecordId"><option value="">연결하지 않음</option>${survey.legacyRecords.map(x=>`<option value="${esc(x.recordId)}" ${x.recordId===(legacy?.recordId||existing?.legacyRecordId)?'selected':''}>${esc(label(x))}</option>`).join('')}</select>
     <label for="status">실물 상태</label><select id="status" name="status">${['ACTIVE','DISCARDED','LOST','UNKNOWN'].map(x=>`<option value="${x}" ${x===(existing?.status||(noLabel?'UNKNOWN':'ACTIVE'))?'selected':''}>${statusName(x)}</option>`).join('')}</select>
-    <label for="note">조사 메모</label><input id="note" name="note" value="${esc(existing?.note||'')}">
     <div id="duplicate-warning"></div><div class="actions"><button type="button" id="cancel" class="secondary">취소</button><button type="submit">후보 확인 후 저장</button></div></form>`;
   click('#cancel',()=>dialog.close());click('#new-from-unlabelled',()=>{dialog.close();mobileAcquisitionDialog();});
   const form=$('#entry-form');
@@ -338,8 +343,7 @@ function entryDialog(noLabel=false,existing=null,legacy=null,options={}){
     }
     let physicalId=id,temporaryId=null;
     if(noLabel){temporaryId=`temp-${crypto.randomUUID()}`;if(choice==='existing'){physicalId=normalizePhysicalId($('#candidate-physical').value);if(!survey.physicalBooks.some(x=>x.physicalId===physicalId))throw Error('기존 실물번호를 확인하세요.');temporaryId=null;}}
-    const entry={physicalId,oldPhysicalId:action==='CHANGE_PHYSICAL_ID'?existing.physicalId:null,action,temporaryId,isNew:!existing&&!(noLabel&&choice==='existing'),titleRaw:f.get('titleRaw'),publisherRaw:f.get('publisherRaw')||'',volume:f.get('volume')||'',acquiredDateRaw:existing?.acquiredDateRaw||(choice==='distinct'?'':survey.legacyRecords.find(x=>x.recordId===f.get('legacyRecordId'))?.registeredDateRaw||''),legacyRecordId:choice==='distinct'&&legacy?null:f.get('legacyRecordId')||null,status:action==='CHANGE_PHYSICAL_ID'?existing.status:f.get('status'),labelStatus:noLabel?'MISSING':'PRESENT',note:f.get('note')||'',recordedAt:new Date().toISOString(),candidateChoice:choice||null};
-    if(choice==='uncertain'){entry.note=`[유사 도서 확인 필요] ${entry.note}`.trim();}
+    const entry={physicalId,oldPhysicalId:action==='CHANGE_PHYSICAL_ID'?existing.physicalId:null,action,temporaryId,isNew:!existing&&!(noLabel&&choice==='existing'),titleRaw:f.get('titleRaw'),publisherRaw:f.get('publisherRaw')||'',volume:f.get('volume')||'',acquiredDateRaw:existing?.acquiredDateRaw||(choice==='distinct'?'':survey.legacyRecords.find(x=>x.recordId===f.get('legacyRecordId'))?.registeredDateRaw||''),legacyRecordId:choice==='distinct'&&legacy?null:f.get('legacyRecordId')||null,status:action==='CHANGE_PHYSICAL_ID'?existing.status:f.get('status'),labelStatus:noLabel?'MISSING':'PRESENT',note:existing?.note||'',recordedAt:new Date().toISOString(),candidateChoice:choice||null};
     const next=structuredClone(survey),index=next.entries.findIndex(x=>existing?(x.oldPhysicalId===existing.physicalId||x.physicalId===existing.physicalId):(x.physicalId&&x.physicalId===physicalId));
     if(index>=0)next.entries[index]=entry;else next.entries.push(entry);
     next.savedAt=new Date().toISOString();saveSurvey(next);dialog.close();mobileRender();notice('조사 기록을 기기에 저장했습니다.');

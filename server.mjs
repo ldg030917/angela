@@ -55,6 +55,13 @@ async function handle(req,res){
     return json({addedPhysical:result.addedPhysical,addedLegacy:result.addedLegacy,unchanged:result.unchanged,filledDates:result.filledDates});
   }
   const body=JSON.parse(raw.toString()||'{}');
+  if(p==='/api/reset'){
+    if(Number(body.revision)!==db.revision)throw Error('원장이 변경되었습니다. 화면을 새로고침한 뒤 다시 시도하세요.');
+    const backup='catalog-backup-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomUUID().slice(0,8)+'.json';
+    await fs.writeFile(path.join(data,backup),JSON.stringify(db,null,2),{flag:'wx'});
+    await save(emptyDb());
+    return json({backup,dataDirectory:data});
+  }
   if(p==='/api/download-json'){
     const value=body.payload,name=body.filename;
     if(!['angela-survey/v2','angela-package/v2'].includes(value?.schema)||!(/^[a-zA-Z0-9-]+\.json$/).test(name))throw Error('파일 형식이 올바르지 않습니다.');
@@ -72,4 +79,4 @@ async function handle(req,res){
   if(p==='/api/review/legacy'){await save(resolveLegacyReview(db,body.recordId));return json({ok:true});}
   throw Error('지원하지 않는 요청입니다.');
 }
-server.listen(Number(process.env.PORT||4173),process.env.HOST||'127.0.0.1',()=>console.log(`Angela: http://${process.env.HOST||'127.0.0.1'}:${process.env.PORT||4173}`));
+server.listen(Number(process.env.PORT||4173),process.env.HOST||'127.0.0.1',()=>console.log(`Angela: http://${process.env.HOST||'127.0.0.1'}:${server.address().port}`));

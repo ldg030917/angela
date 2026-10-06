@@ -348,10 +348,10 @@ export function resolveLegacyReview(db,recordId){
 export function importResultExcel(db,rows){
   insist(Array.isArray(rows)&&rows.length>0&&rows.length<=10000,'결과 Excel 도서 행을 확인하세요.');
   const next=structuredClone(db),seen=new Set();
-  let addedPhysical=0,addedLegacy=0,unchanged=0,filledDates=0;
+  let addedPhysical=0,addedLegacy=0,unchanged=0,filledDates=0,filledNotes=0;
   for(const row of rows){
     const id=String(row.physicalId||'').trim(),title=canonical(row.titleRaw),publisher=canonical(row.publisherRaw);
-    const date=String(row.acquiredDateRaw||'').trim(),status=row.status;
+    const date=String(row.acquiredDateRaw||'').trim(),noteRaw=String(row.noteRaw||'').trim(),status=row.status;
     insist(id&&!seen.has(id),'도서번호가 비었거나 중복되었습니다: '+id);
     insist(title,'도서명을 입력하세요: '+id);
     insist(['ACTIVE','DISCARDED','LOST','UNKNOWN'].includes(status),'실물 상태가 올바르지 않습니다: '+id);
@@ -362,18 +362,20 @@ export function importResultExcel(db,rows){
       if(legacy){
         insist(legacy.titleCanonical===title,'기존 장부의 도서명과 다릅니다: '+id);
         if(!legacy.registeredDateRaw&&date){legacy.registeredDateRaw=date;filledDates++;}
+        if(noteRaw&&!legacy.noteRaw){legacy.noteRaw=noteRaw;filledNotes++;}
         unchanged++;continue;
       }
       next.legacyRecords.push({recordId:randomUUID(),sourceSheet:'결과 Excel',sourceRow:row.sourceRow||0,
         legacyLedgerId:id,registeredDateRaw:date,registeredDateNormalized:'',
         ...clean('title',row.titleRaw),...clean('publisher',row.publisherRaw),
-        quantityRaw:'',noteRaw:'',authorRaw:'',locationRaw:'',reviewRequired:false,reviewReason:'',version:1});
+        quantityRaw:'',noteRaw,authorRaw:'',locationRaw:'',reviewRequired:false,reviewReason:'',version:1});
       addedLegacy++;continue;
     }
     insist(/^\d{4}-\d{4}$/.test(id),'확인된 실물의 도서번호는 YYYY-NNNN 형식이어야 합니다: '+id);
     if(physical){
       const currentDate=physical.acquiredDateRaw||next.legacyRecords.find(x=>x.recordId===physical.legacyRecordId)?.registeredDateRaw||'';
       insist(physical.titleCanonical===title&&physical.publisherCanonical===publisher&&physical.status===status&&currentDate===date,'기존 실물과 내용이 다릅니다: '+id+' · PC 실물 편집이나 조사 반영에서 수정하세요.');
+      if(noteRaw&&!physical.noteRaw){physical.noteRaw=noteRaw;filledNotes++;}
       unchanged++;continue;
     }
     insist(!next.issuedIds.includes(id),'이미 사용된 도서번호입니다: '+id);
@@ -381,13 +383,13 @@ export function importResultExcel(db,rows){
     const linked=legacy?.titleCanonical===title?legacy:candidates.length===1?candidates[0]:null,stamp=now();
     next.physicalBooks.push({physicalId:id,temporaryId:null,legacyRecordId:linked?.recordId||null,
       ...clean('title',row.titleRaw),...publisherFields(next,row.publisherRaw),volume:'',
-      quantity:1,status,labelStatus:'UNKNOWN',note:'결과 Excel에서 가져옴',acquiredDateRaw:date,
+      quantity:1,status,labelStatus:'UNKNOWN',note:'',noteRaw,acquiredDateRaw:date,
       version:1,createdAt:stamp,updatedAt:stamp,discardedAt:status==='DISCARDED'?stamp:null,authorRaw:'',locationRaw:''});
     next.issuedIds.push(id);
     next.statusHistory.push({physicalId:id,from:null,to:status,at:stamp,sessionId:null});
     if(status==='DISCARDED')next.disposals.push({physicalId:id,legacyRecordId:linked?.recordId||null,title,at:stamp,note:'결과 Excel에서 가져옴',sessionId:null});
     addedPhysical++;
   }
-  if(addedPhysical||addedLegacy||filledDates){next.publishers=publisherDictionary(next.legacyRecords,next.physicalBooks);next.revision++;}
-  return {next,addedPhysical,addedLegacy,unchanged,filledDates};
+  if(addedPhysical||addedLegacy||filledDates||filledNotes){next.publishers=publisherDictionary(next.legacyRecords,next.physicalBooks);next.revision++;}
+  return {next,addedPhysical,addedLegacy,unchanged,filledDates,filledNotes};
 }

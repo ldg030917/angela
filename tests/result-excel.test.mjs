@@ -9,8 +9,8 @@ import {readResultExcel} from '../result-excel-import.mjs';
 import {unzip,zip,sheet} from '../xlsx-native.mjs';
 
 const sourceRows=[
-  {legacyLedgerId:'2026-0001',registeredDateRaw:'2009.04.28.',titleRaw:'연결된 책',publisherRaw:'출판사',quantityRaw:'1'},
-  {legacyLedgerId:'2026-0002',registeredDateRaw:'2010.01.02.',titleRaw:'미확인 책',publisherRaw:'출판사',quantityRaw:'1'},
+  {legacyLedgerId:'2026-0001',registeredDateRaw:'2009.04.28.',titleRaw:'연결된 책',publisherRaw:'출판사',quantityRaw:'1',noteRaw:'후원사 A'},
+  {legacyLedgerId:'2026-0002',registeredDateRaw:'2010.01.02.',titleRaw:'미확인 책',publisherRaw:'출판사',quantityRaw:'1',noteRaw:'기업 B'},
   {legacyLedgerId:'10',registeredDateRaw:'',titleRaw:'보조 자료',publisherRaw:'출판사',quantityRaw:'1'}
 ];
 const source=()=>addLegacy(emptyDb('catalog'),sourceRows);
@@ -27,7 +27,7 @@ test('과거 장부 연결 시 원본 날짜를 실물 입수일로 보존한다
   assert.equal(next.physicalBooks[0].acquiredDateRaw,'2009.04.28.');
 });
 
-test('결과 Excel은 미확인 도서를 포함하고 날짜·정렬·다섯 열을 유지하며 다시 가져올 수 있다',async()=>{
+test('결과 Excel은 미확인 도서를 포함하고 날짜·정렬·비고 여섯 열을 유지하며 다시 가져올 수 있다',async()=>{
   const db=source(),folder=await fs.mkdtemp(path.join(os.tmpdir(),'angela-result-'));
   db.physicalBooks.push({physicalId:'2026-0050',legacyRecordId:db.legacyRecords[0].recordId,
     titleRaw:'연결된 책',titleCanonical:'연결된 책',publisherRaw:'출판사',publisherCanonical:'출판사',
@@ -42,13 +42,16 @@ test('결과 Excel은 미확인 도서를 포함하고 날짜·정렬·다섯 �
     assert.equal(rows[1].acquiredDateRaw,'2009.04.28.');
     assert.equal(rows[0].acquiredDateRaw,'2010.01.02.');
     assert.doesNotMatch(xml,/매수/);
+    assert.match(xml,/비고/);
+    assert.equal(rows[0].noteRaw,'기업 B');
+    assert.equal(rows[1].noteRaw,'후원사 A');
     assert.deepEqual([...xml.matchAll(/<row\b/g)].length,4);
     const restored=importResultExcel(emptyDb('new'),rows);
     assert.equal(restored.addedPhysical,1);
     assert.equal(restored.addedLegacy,2);
     await makeInventoryExcel(restored.next,path.join(folder,'roundtrip.xlsx'));
     const roundtrip=readResultExcel(await fs.readFile(path.join(folder,'roundtrip.xlsx')));
-    assert.deepEqual(roundtrip.map(x=>[x.physicalId,x.acquiredDateRaw,x.titleRaw,x.publisherRaw,x.status]),rows.map(x=>[x.physicalId,x.acquiredDateRaw,x.titleRaw,x.publisherRaw,x.status]));
+    assert.deepEqual(roundtrip.map(x=>[x.physicalId,x.acquiredDateRaw,x.titleRaw,x.publisherRaw,x.noteRaw,x.status]),rows.map(x=>[x.physicalId,x.acquiredDateRaw,x.titleRaw,x.publisherRaw,x.noteRaw,x.status]));
     const again=importResultExcel(restored.next,rows);
     assert.equal(again.unchanged,3);
     assert.equal(again.next.revision,restored.next.revision);
@@ -72,5 +75,6 @@ test('이전 여섯 열 결과 Excel도 읽고 매수 열은 가져오지 않는
   assert.equal(rows.length,1);
   assert.deepEqual([rows[0].physicalId,rows[0].status],['2026-0001','ACTIVE']);
   assert.equal(Object.hasOwn(rows[0],'quantity'),false);
+  assert.equal(rows[0].noteRaw,null);
 });
 
