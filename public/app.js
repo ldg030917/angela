@@ -132,7 +132,7 @@ function pcEditDialog(id){
     const r=p.reviews[i],e=p.entries.find(x=>x.physicalId===r.entryId||x.temporaryId===r.entryId||x.oldPhysicalId===r.entryId||x.oldPhysicalId===r.oldPhysicalId||x.physicalId===r.physicalId);
     const old=state.physicalBooks.find(x=>x.physicalId===(e?.oldPhysicalId||e?.physicalId));
     const select=$('#decision-'+i);if(!select.value)select.value=defaultReview(r);
-    dialog.innerHTML='<form id="review-form"><div class="eyebrow">검토 '+(i+1)+' / '+p.reviews.length+'</div><h2>'+esc(e?.titleCanonical||old?.titleCanonical||'도서명 확인 필요')+'</h2><p class="muted">'+esc(e?.publisherCanonical||old?.publisherCanonical||'출판사 미기재')+'</p><div class="review-context"><div><span>기존 번호</span><strong>'+esc(e?.oldPhysicalId||old?.physicalId||'없음')+'</strong></div><div><span>조사 번호</span><strong>'+esc(e?.physicalId||'번호 없음')+'</strong></div></div><p class="notice-inline">'+esc(r.message)+'</p>'+(r.candidates?.length?'<div class="review-candidates"><strong>중복 후보</strong>'+r.candidates.map(x=>'<p>'+esc(x.physicalId||x.legacyLedgerId||'')+' · '+esc(x.title||x.titleCanonical||x.titleRaw||'')+'</p>').join('')+'</div>':'')+'<label for="review-choice">처리 방법</label><select id="review-choice">'+r.options.map(o=>'<option value="'+o+'">'+(reviewLabels[o]||o)+'</option>').join('')+'</select><div id="review-extra"></div><div class="actions"><button type="button" id="review-stop" class="secondary">중단</button><button type="button" id="review-back" class="secondary" '+(i?'':'disabled')+'>이전</button><button type="submit" id="review-next">'+(i===p.reviews.length-1?'확인 완료':'확인 후 다음')+'</button></div></form>';
+    dialog.innerHTML='<form id="review-form"><div class="eyebrow">검토 '+(i+1)+' / '+p.reviews.length+'</div><h2>'+esc(e?.titleCanonical||old?.titleCanonical||'도서명 확인 필요')+'</h2><p class="muted">'+esc(e?.publisherCanonical||old?.publisherCanonical||'출판사 미기재')+'</p><div class="review-context"><div><span>기존 번호</span><strong>'+esc(e?.oldPhysicalId||old?.physicalId||'없음')+'</strong></div><div><span>조사 번호</span><strong>'+esc(e?.physicalId||'번호 없음')+'</strong></div></div><p class="notice-inline">'+esc(r.message)+'</p>'+(r.candidates?.length?'<div class="review-candidates"><strong>중복 후보</strong>'+r.candidates.map(x=>'<p>'+esc(x.physicalId||x.legacyLedgerId||'')+' · '+esc(x.title||x.titleCanonical||x.titleRaw||'')+'</p>').join('')+'</div>':'')+'<label for="review-choice">처리 방법</label><select id="review-choice">'+r.options.map(o=>'<option value="'+o+'">'+(reviewLabels[o]||o)+'</option>').join('')+'</select><div id="review-extra"></div><div class="actions"><button type="button" id="review-stop" class="secondary">중단</button><button type="button" id="review-back" class="secondary" '+(i?'':'disabled')+'>이전</button><button type="submit" id="review-next">'+(i===p.reviews.length-1?'확인 완료':'확인 후 다음')+' <kbd class="key-hint" aria-hidden="true">Enter ↵</kbd></button></div></form>';
     $('#review-choice').value=select.value;
     const showExtra=()=>{
       const choice=$('#review-choice').value,box=$('#review-extra');box.innerHTML='';
@@ -141,6 +141,11 @@ function pcEditDialog(id){
       else if(r.kind==='unidentified'&&choice==='issue'){box.innerHTML='<label for="review-year">발급 연도</label><input id="review-year" type="number" min="2000" max="9999" required value="'+esc($('#year').value)+'"><p class="muted">반영할 때 이 연도의 다음 실물번호를 발급합니다.</p>';}
     };
     $('#review-choice').onchange=showExtra;showExtra();
+    $('#review-form').addEventListener('keydown',event=>{
+      if(event.key!=='Enter'||event.isComposing)return;
+      if(event.target.closest('button')?.id==='review-back'||event.target.closest('button')?.id==='review-stop')return;
+      event.preventDefault();if(!event.repeat)$('#review-form').requestSubmit($('#review-next'));
+    });
     click('#review-stop',()=>dialog.close());click('#review-back',()=>reviewAt(i-1));
     $('#review-form').onsubmit=run(async event=>{
       event.preventDefault();const choice=$('#review-choice').value;
