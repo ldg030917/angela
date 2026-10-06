@@ -46,7 +46,7 @@ test('모바일 예상 번호가 다른 PC 작업과 충돌하면 반영 시 새
   assert.throws(()=>addNewAcquisition(seeded(),{...input,acquiredDateRaw:'2026-02-30'}),/입수일/);
 });
 
-test('결과 Excel은 실물 한 권당 한 행과 요청한 여섯 열만 제공한다',async()=>{
+test('결과 Excel은 실물 한 권당 한 행과 요청한 다섯 열만 제공한다',async()=>{
   const {next}=addNewAcquisition(seeded(),input);
   const directory=new URL('../data-real-validation/',import.meta.url);
   await mkdir(directory,{recursive:true});
@@ -57,8 +57,8 @@ test('결과 Excel은 실물 한 권당 한 행과 요청한 여섯 열만 제�
   assert.doesNotMatch(files.get('xl/workbook.xml'),/과거장부|폐기기록/);
   const xml=files.get('xl/worksheets/sheet1.xml');
   assert.deepEqual([...xml.matchAll(/<row\b/g)].length,4);
-  for(const title of ['도서번호','입수일','도서명','출판사','매수','실물 상태'])assert.ok(xml.includes(title));
+  for(const title of ['도서번호','입수일','도서명','출판사','실물 상태'])assert.ok(xml.includes(title));
   assert.ok(xml.includes('2026-0024'));
   assert.ok(xml.includes('보유 중'));
-  assert.match(xml,/<c r="E2" s="0"><v>1<\/v><\/c>/);
+  assert.doesNotMatch(xml,/매수/);
 });

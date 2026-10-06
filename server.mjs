@@ -3,9 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview,addNewAcquisition,editPhysicalBook} from './inventory.mjs';
+import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview,addNewAcquisition,editPhysicalBook,importResultExcel} from './inventory.mjs';
 import {readExcelUpload} from './excel-upload.mjs';
 import {makeInventoryExcel} from './inventory-excel.mjs';
+import {readResultExcel} from './result-excel-import.mjs';
 
 const root=path.dirname(fileURLToPath(import.meta.url));
 const data=path.resolve(root,process.env.DATA_DIR||'data');await fs.mkdir(data,{recursive:true});
@@ -47,6 +48,11 @@ async function handle(req,res){
   if(p==='/api/excel'){
     const rows=await readExcelUpload(raw);if(!rows.length)throw Error('빈 원장입니다.');
     await save(addLegacy(db,rows));return json({count:rows.length});
+  }
+  if(p==='/api/result-excel'){
+    const result=importResultExcel(db,readResultExcel(raw));
+    if(result.next.revision!==db.revision)await save(result.next);
+    return json({addedPhysical:result.addedPhysical,addedLegacy:result.addedLegacy,unchanged:result.unchanged,filledDates:result.filledDates});
   }
   const body=JSON.parse(raw.toString()||'{}');
   if(p==='/api/download-json'){

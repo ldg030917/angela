@@ -216,7 +216,7 @@ function applyIdChange(next,e,newId,sessionId){
   const old=next.physicalBooks.find(x=>x.physicalId===e.oldPhysicalId);
   insist(old,'번호를 바꿀 기존 실물을 찾을 수 없습니다.');
   insist(id!==e.oldPhysicalId&&!isPhysicalIdAlreadyIssued(next,id),'이 실물 번호는 이미 다른 책에 사용 중입니다.');
-  const stamp=now(),row={...old,physicalId:id,legacyRecordId:e.legacyRecordId||old.legacyRecordId,...clean('title',e.titleRaw),...publisherFields(next,e.publisherRaw),volume:e.volume,status:e.status,labelStatus:e.labelStatus,note:e.note||old.note,version:old.version+1,updatedAt:stamp,discardedAt:e.status==='DISCARDED'?(old.discardedAt||stamp):null};
+  const stamp=now(),legacy=next.legacyRecords.find(x=>x.recordId===(e.legacyRecordId||old.legacyRecordId)),row={...old,physicalId:id,acquiredDateRaw:old.acquiredDateRaw||legacy?.registeredDateRaw||'',legacyRecordId:e.legacyRecordId||old.legacyRecordId,...clean('title',e.titleRaw),...publisherFields(next,e.publisherRaw),volume:e.volume,status:e.status,labelStatus:e.labelStatus,note:e.note||old.note,version:old.version+1,updatedAt:stamp,discardedAt:e.status==='DISCARDED'?(old.discardedAt||stamp):null};
   next.physicalBooks[next.physicalBooks.indexOf(old)]=row;
   if(old.status!==row.status)next.statusHistory.push({physicalId:id,from:old.status,to:row.status,at:stamp,sessionId});
   if(row.status==='DISCARDED'&&old.status!=='DISCARDED')next.disposals.push({physicalId:id,legacyRecordId:row.legacyRecordId,title:row.titleCanonical,at:stamp,note:e.note,sessionId});
@@ -278,8 +278,9 @@ export function applySurvey(db,report,decisions,revision,year) {
     if(!old) insist(!next.issuedIds.includes(id),`이미 발급된 실물 번호입니다: ${id}`);
     const linked=!!(selected==='link'||decisions?.[`unidentified:${key}`]==='link');
     const keepInfo=e.action==='CONFIRM'&&!!old;
+    const legacy=next.legacyRecords.find(x=>x.recordId===e.legacyRecordId);
     const row={physicalId:id,temporaryId:null,legacyRecordId:e.legacyRecordId||null,...clean('title',keepInfo?old.titleRaw:e.titleRaw),...publisherFields(next,keepInfo?old.publisherRaw:e.publisherRaw),
-      volume:keepInfo?old.volume:e.volume,status:e.status,labelStatus:e.labelStatus,note:e.note,acquiredDateRaw:old?old.acquiredDateRaw||'':e.acquiredDateRaw||'',version:(old?.version||0)+1,
+      volume:keepInfo?old.volume:e.volume,status:e.status,labelStatus:e.labelStatus,note:e.note,acquiredDateRaw:old?.acquiredDateRaw||e.acquiredDateRaw||legacy?.registeredDateRaw||'',version:(old?.version||0)+1,
       createdAt:old?.createdAt||now(),updatedAt:now(),discardedAt:e.status==='DISCARDED'?(old?.discardedAt||now()):null,
       authorRaw:e.authorRaw||'',locationRaw:e.locationRaw||''};
     if(linked&&old){Object.assign(row,{legacyRecordId:e.legacyRecordId||old.legacyRecordId,titleRaw:old.titleRaw,titleCanonical:old.titleCanonical,titleSearch:old.titleSearch,publisherRaw:old.publisherRaw,publisherCanonical:old.publisherCanonical,publisherSearch:old.publisherSearch,volume:old.volume,authorRaw:old.authorRaw,locationRaw:old.locationRaw,status:e.status==='UNKNOWN'?old.status:e.status});}
@@ -319,8 +320,9 @@ export function resolveReview(db,reviewId,mode,physicalId,year,status){
   }
   if(id){
     const old=next.physicalBooks.find(x=>x.physicalId===id);
+    const legacy=next.legacyRecords.find(x=>x.recordId===e.legacyRecordId);
     const row={physicalId:id,temporaryId:null,legacyRecordId:e.legacyRecordId||old?.legacyRecordId||null,...clean('title',e.titleRaw),...publisherFields(next,e.publisherRaw),
-      volume:e.volume||'',status:status||e.status,labelStatus:e.labelStatus,note:e.note||'',acquiredDateRaw:old?old.acquiredDateRaw||'':e.acquiredDateRaw||'',version:(old?.version||0)+1,
+      volume:e.volume||'',status:status||e.status,labelStatus:e.labelStatus,note:e.note||'',acquiredDateRaw:old?.acquiredDateRaw||e.acquiredDateRaw||legacy?.registeredDateRaw||'',version:(old?.version||0)+1,
       createdAt:old?.createdAt||now(),updatedAt:now(),discardedAt:(status||e.status)==='DISCARDED'?(old?.discardedAt||now()):null,
       authorRaw:e.authorRaw||'',locationRaw:e.locationRaw||''};
     if(mode==='link'&&old){Object.assign(row,{titleRaw:old.titleRaw,titleCanonical:old.titleCanonical,titleSearch:old.titleSearch,publisherRaw:old.publisherRaw,publisherCanonical:old.publisherCanonical,publisherSearch:old.publisherSearch,volume:old.volume,authorRaw:old.authorRaw,locationRaw:old.locationRaw});}
@@ -341,4 +343,51 @@ export function resolveLegacyReview(db,recordId){
   next.reviewHistory=[...(next.reviewHistory||[]),{kind:'legacy-quality',recordId,at:now(),quantityRaw:record.quantityRaw,noteRaw:record.noteRaw}];
   next.revision++;
   return next;
+}
+
+export function importResultExcel(db,rows){
+  insist(Array.isArray(rows)&&rows.length>0&&rows.length<=10000,'결과 Excel 도서 행을 확인하세요.');
+  const next=structuredClone(db),seen=new Set();
+  let addedPhysical=0,addedLegacy=0,unchanged=0,filledDates=0;
+  for(const row of rows){
+    const id=String(row.physicalId||'').trim(),title=canonical(row.titleRaw),publisher=canonical(row.publisherRaw);
+    const date=String(row.acquiredDateRaw||'').trim(),status=row.status;
+    insist(id&&!seen.has(id),'도서번호가 비었거나 중복되었습니다: '+id);
+    insist(title,'도서명을 입력하세요: '+id);
+    insist(['ACTIVE','DISCARDED','LOST','UNKNOWN'].includes(status),'실물 상태가 올바르지 않습니다: '+id);
+    seen.add(id);
+    const physical=next.physicalBooks.find(x=>x.physicalId===id);
+    const legacy=next.legacyRecords.find(x=>x.legacyLedgerId===id);
+    if(status==='UNKNOWN'&&!physical){
+      if(legacy){
+        insist(legacy.titleCanonical===title,'기존 장부의 도서명과 다릅니다: '+id);
+        if(!legacy.registeredDateRaw&&date){legacy.registeredDateRaw=date;filledDates++;}
+        unchanged++;continue;
+      }
+      next.legacyRecords.push({recordId:randomUUID(),sourceSheet:'결과 Excel',sourceRow:row.sourceRow||0,
+        legacyLedgerId:id,registeredDateRaw:date,registeredDateNormalized:'',
+        ...clean('title',row.titleRaw),...clean('publisher',row.publisherRaw),
+        quantityRaw:'',noteRaw:'',authorRaw:'',locationRaw:'',reviewRequired:false,reviewReason:'',version:1});
+      addedLegacy++;continue;
+    }
+    insist(/^\d{4}-\d{4}$/.test(id),'확인된 실물의 도서번호는 YYYY-NNNN 형식이어야 합니다: '+id);
+    if(physical){
+      const currentDate=physical.acquiredDateRaw||next.legacyRecords.find(x=>x.recordId===physical.legacyRecordId)?.registeredDateRaw||'';
+      insist(physical.titleCanonical===title&&physical.publisherCanonical===publisher&&physical.status===status&&currentDate===date,'기존 실물과 내용이 다릅니다: '+id+' · PC 실물 편집이나 조사 반영에서 수정하세요.');
+      unchanged++;continue;
+    }
+    insist(!next.issuedIds.includes(id),'이미 사용된 도서번호입니다: '+id);
+    const candidates=next.legacyRecords.filter(x=>x.titleCanonical===title&&x.publisherCanonical===publisher&&(!date||x.registeredDateRaw===date));
+    const linked=legacy?.titleCanonical===title?legacy:candidates.length===1?candidates[0]:null,stamp=now();
+    next.physicalBooks.push({physicalId:id,temporaryId:null,legacyRecordId:linked?.recordId||null,
+      ...clean('title',row.titleRaw),...publisherFields(next,row.publisherRaw),volume:'',
+      quantity:1,status,labelStatus:'UNKNOWN',note:'결과 Excel에서 가져옴',acquiredDateRaw:date,
+      version:1,createdAt:stamp,updatedAt:stamp,discardedAt:status==='DISCARDED'?stamp:null,authorRaw:'',locationRaw:''});
+    next.issuedIds.push(id);
+    next.statusHistory.push({physicalId:id,from:null,to:status,at:stamp,sessionId:null});
+    if(status==='DISCARDED')next.disposals.push({physicalId:id,legacyRecordId:linked?.recordId||null,title,at:stamp,note:'결과 Excel에서 가져옴',sessionId:null});
+    addedPhysical++;
+  }
+  if(addedPhysical||addedLegacy||filledDates){next.publishers=publisherDictionary(next.legacyRecords,next.physicalBooks);next.revision++;}
+  return {next,addedPhysical,addedLegacy,unchanged,filledDates};
 }
