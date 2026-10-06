@@ -53,7 +53,7 @@ export function readResultExcel(buffer){
     if(!titleRaw)throw Error((index+1)+'행: 도서명이 비었습니다.');
     if(!status)throw Error((index+1)+'행: 실물 상태를 확인하세요.');
     seen.add(id);
-    result.push({physicalId:id,acquiredDateRaw:asDate(row[column('입수일')]),titleRaw,publisherRaw,noteRaw:column('비고')<0?null:String(row[column('비고')]??'').trim(),status,sourceRow:index+1});
+    result.push({physicalId:id,acquiredDateRaw:asDate(row[column('입수일')]),titleRaw,publisherRaw,volume:column('권 번호')<0?null:String(row[column('권 번호')]??'').trim(),noteRaw:column('비고')<0?null:String(row[column('비고')]??'').trim(),status,sourceRow:index+1});
   }
   if(!result.length)throw Error('결과 Excel에 도서가 없습니다.');
   return result;

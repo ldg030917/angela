@@ -52,7 +52,7 @@ async function handle(req,res){
   if(p==='/api/result-excel'){
     const result=importResultExcel(db,readResultExcel(raw));
     if(result.next.revision!==db.revision)await save(result.next);
-    return json({addedPhysical:result.addedPhysical,addedLegacy:result.addedLegacy,unchanged:result.unchanged,filledDates:result.filledDates});
+    return json({addedPhysical:result.addedPhysical,addedLegacy:result.addedLegacy,unchanged:result.unchanged,filledDates:result.filledDates,filledVolumes:result.filledVolumes});
   }
   const body=JSON.parse(raw.toString()||'{}');
   if(p==='/api/reset'){
