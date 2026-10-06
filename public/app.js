@@ -211,9 +211,26 @@ function editSurveyEntryDialog(index){
     '<label for="edit-entry-publisher">출판사</label><input id="edit-entry-publisher" name="publisherRaw" autocomplete="off" value="'+esc(entry.publisherRaw)+'">'+
     '<label for="edit-entry-volume">권 번호 (알고 있는 경우)</label><input id="edit-entry-volume" name="volume" value="'+esc(entry.volume||'')+'">'+
     (acquisition?'':'<label for="edit-entry-status">실물 상태</label><select id="edit-entry-status" name="status">'+['ACTIVE','DISCARDED','LOST','UNKNOWN'].map(s=>'<option value="'+s+'" '+(s===entry.status?'selected':'')+'>'+statusName(s)+'</option>').join('')+'</select>')+
-    (acquisition?'':'<label for="edit-entry-legacy">과거 장부 연결</label><select id="edit-entry-legacy" name="legacyRecordId"><option value="">연결하지 않음</option>'+survey.legacyRecords.map(x=>'<option value="'+esc(x.recordId)+'" '+(x.recordId===entry.legacyRecordId?'selected':'')+'>'+esc(label(x))+'</option>').join('')+'</select>')+
+    (acquisition?'':'<label for="edit-entry-legacy-search">과거 장부 연결 · 도서명 또는 장부번호 검색</label><input id="edit-entry-legacy-search" type="search" autocomplete="off" placeholder="도서명 또는 장부번호" value="'+esc(entry.titleRaw)+'"><input id="edit-entry-legacy-id" type="hidden" name="legacyRecordId" value="'+esc(entry.legacyRecordId||'')+'"><div id="edit-entry-legacy-selected" aria-live="polite"></div><div id="edit-entry-legacy-suggestions"></div>')+
     '<div class="actions"><button type="button" id="edit-entry-cancel" class="secondary">취소</button><button type="submit">수정 저장</button></div></form>';
   click('#edit-entry-cancel',()=>dialog.close());formatIdField($('#edit-entry-id'));
+  if(!acquisition){
+    const legacyRecords=survey.legacyRecords||[];
+    const showSelected=()=>{
+      const selected=legacyRecords.find(x=>x.recordId===$('#edit-entry-legacy-id').value);
+      $('#edit-entry-legacy-selected').innerHTML=selected?'<div class="candidate candidate-row"><div><strong>연결됨 · '+esc(label(selected))+'</strong><span class="muted">'+esc(selected.sourceSheet||'')+' '+esc(selected.sourceRow||'')+'행</span></div><button type="button" class="secondary" id="edit-entry-legacy-clear">연결 해제</button></div>':'<p class="muted">연결된 과거 장부가 없습니다.</p>';
+      const clear=$('#edit-entry-legacy-clear');
+      if(clear)clear.onclick=()=>{$('#edit-entry-legacy-id').value='';showSelected();};
+    };
+    const showSuggestions=()=>{
+      const query=$('#edit-entry-legacy-search').value.trim();
+      const matches=query?search(query,legacyRecords,8):[];
+      $('#edit-entry-legacy-suggestions').innerHTML=!query?'':matches.length?matches.map(x=>'<div class="candidate candidate-row"><div><strong>'+esc(x.legacyLedgerId)+' · '+esc(x.titleCanonical)+'</strong><span class="muted">'+esc(x.publisherCanonical)+' · '+esc(x.sourceSheet)+' '+esc(x.sourceRow)+'행</span></div><button type="button" class="secondary" data-edit-legacy="'+esc(x.recordId)+'">연결</button></div>').join(''):'<p class="muted">일치하는 과거 장부가 없습니다.</p>';
+      $('#edit-entry-legacy-suggestions').querySelectorAll('[data-edit-legacy]').forEach(button=>button.onclick=()=>{$('#edit-entry-legacy-id').value=button.dataset.editLegacy;$('#edit-entry-legacy-search').value='';showSelected();showSuggestions();});
+    };
+    $('#edit-entry-legacy-search').oninput=showSuggestions;
+    showSelected();showSuggestions();
+  }
   $('#edit-entry-form').onsubmit=run(async event=>{
     event.preventDefault();const f=new FormData(event.target),next=structuredClone(survey),updated=next.entries[index];
     const id=numbered?normalizePhysicalId(f.get('physicalId')):null;
