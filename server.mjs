@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
-import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview,addNewAcquisition,editPhysicalBook,editLegacyNote,importResultExcel} from './inventory.mjs';
+import {emptyDb,migrate,addLegacy,createSession,lookup,inspectSurvey,applySurvey,resolveReview,resolveLegacyReview,addNewAcquisition,importPhysicalRows,editPhysicalBook,editLegacyNote,importResultExcel} from './inventory.mjs';
 import {readExcelUpload} from './excel-upload.mjs';
 import {makeInventoryExcel} from './inventory-excel.mjs';
 import {readResultExcel} from './result-excel-import.mjs';
@@ -15,6 +15,7 @@ let db;
 try {db=migrate(JSON.parse(await fs.readFile(dbPath,'utf8')));} catch(e){if(e.code!=='ENOENT')throw e;db=emptyDb();}
 async function save(next){await fs.writeFile(dbPath+'.tmp',JSON.stringify(next,null,2));await fs.rename(dbPath+'.tmp',dbPath);db=next;}
 const downloads=new Map();
+const pendingPhysicalImports=new Map();
 let queue=Promise.resolve();
 const server=http.createServer((req,res)=>{const work=()=>handle(req,res).catch(e=>{if(!res.headersSent)res.writeHead(400,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:e.message}));});queue=queue.then(work,work);});
 async function handle(req,res){
@@ -54,6 +55,21 @@ async function handle(req,res){
     if(result.next.revision!==db.revision)await save(result.next);
     return json({addedPhysical:result.addedPhysical,addedLegacy:result.addedLegacy,unchanged:result.unchanged,filledDates:result.filledDates,filledVolumes:result.filledVolumes});
   }
+  if(p==='/api/physical/import-preview'){
+    const start=Number(url.searchParams.get('start')),end=Number(url.searchParams.get('end'));
+    if(!Number.isInteger(start)||!Number.isInteger(end)||start<1||end<start||end>10001)throw Error('시작·끝 행 번호를 확인하세요.');
+    const sheet=url.searchParams.get('sheet')?.trim()||'';
+    const all=await readExcelUpload(raw);
+    const ranged=all.filter(x=>x.sourceRow>=start&&x.sourceRow<=end);
+    const sheets=[...new Set(ranged.map(x=>x.sourceSheet))];
+    if(sheet&&!sheets.includes(sheet))throw Error('선택한 범위에서 시트를 찾을 수 없습니다: '+sheet);
+    if(!sheet&&sheets.length>1)throw Error('여러 시트에 해당 행이 있습니다. 시트명을 입력하세요: '+sheets.join(', '));
+    const rows=ranged.filter(x=>!sheet||x.sourceSheet===sheet);
+    const checked=importPhysicalRows(db,rows);
+    const token=randomUUID();
+    pendingPhysicalImports.set(token,{rows,revision:db.revision,expires:Date.now()+600000});
+    return json({token,revision:db.revision,count:checked.ids.length,sheet:sheet||sheets[0],start,end,first:rows.slice(0,3).map(x=>({row:x.sourceRow,id:x.legacyLedgerId,title:x.titleRaw,date:x.registeredDateRaw})),last:rows.slice(-3).map(x=>({row:x.sourceRow,id:x.legacyLedgerId,title:x.titleRaw,date:x.registeredDateRaw}))});
+  }
   const body=JSON.parse(raw.toString()||'{}');
   if(p==='/api/reset'){
     if(Number(body.revision)!==db.revision)throw Error('원장이 변경되었습니다. 화면을 새로고침한 뒤 다시 시도하세요.');
@@ -74,6 +90,14 @@ async function handle(req,res){
   if(p==='/api/preview')return json(inspectSurvey(db,body.report));
   if(p==='/api/apply'){const {next,mapping}=applySurvey(db,body.report,body.decisions,body.revision,body.year);await save(next);return json({mapping});}
   if(p==='/api/review/resolve'){const {next,physicalId}=resolveReview(db,body.reviewId,body.mode,body.physicalId,body.year,body.status);await save(next);return json({physicalId});}
+  if(p==='/api/physical/import-apply'){
+    const pending=pendingPhysicalImports.get(body.token);
+    if(!pending||pending.expires<Date.now())throw Error('미리보기가 만료되었습니다. 다시 검사하세요.');
+    if(pending.revision!==db.revision||Number(body.revision)!==db.revision)throw Error('미리보기 후 원장이 변경되었습니다. 다시 검사하세요.');
+    const result=importPhysicalRows(db,pending.rows);
+    await save(result.next);pendingPhysicalImports.delete(body.token);
+    return json({count:result.ids.length,firstId:result.ids[0],lastId:result.ids.at(-1)});
+  }
   if(p==='/api/physical/add'){const {next,ids}=addNewAcquisition(db,body);await save(next);return json({ids});}
   if(p==='/api/physical/edit'){await save(editPhysicalBook(db,body.oldPhysicalId,body));return json({ok:true});}
   if(p==='/api/legacy/note'){await save(editLegacyNote(db,body.recordId,body.noteRaw,body.version));return json({ok:true});}

@@ -46,6 +46,7 @@ async function desktop(){
     <section class="panel"><span class="step-number">03 / 병합</span><h2>조사 결과 반영</h2><label for="json">조사 결과 불러오기</label><input id="json" type="file" accept=".json" multiple><p class="muted">여러 결과 파일을 함께 선택할 수 있습니다. 파일마다 충돌과 검토 항목을 결정합니다.</p></section></div>
     <section id="review"></section><section class="panel"><h2>검토 필요 <span class="tag warn">${state.reviewQueue.length+state.legacyRecords.filter(x=>x.reviewRequired).length}건</span></h2><div id="queue"></div></section>
     <section class="panel"><h2>실물 목록</h2><button id="pc-add" class="secondary">새로 들여온 책 등록</button><input id="pc-search" type="search" placeholder="실물번호 · 제목 · 출판사 검색"><div id="physical-list"></div></section>
+<section class="panel"><h2>새 실물 Excel 일괄 추가</h2><p class="muted">기존 실물은 수정하지 않습니다. Excel의 번호를 실물번호로 사용하고, 시트의 실제 행 번호 범위만 가져옵니다. 번호 중복이나 잘못된 행이 있으면 전체를 중단합니다.</p><label for="bulk-file">기존 장부 형식 Excel (.xls/.xlsx)</label><input id="bulk-file" type="file" accept=".xls,.xlsx"><label for="bulk-sheet">시트명 (여러 시트의 행 범위가 겹칠 때 입력)</label><input id="bulk-sheet" placeholder="예: 도서목록"><div class="bulk-range"><div><label for="bulk-start">시작 행</label><input id="bulk-start" type="number" min="1" max="10001" placeholder="1457"></div><div><label for="bulk-end">끝 행</label><input id="bulk-end" type="number" min="1" max="10001" placeholder="1788"></div></div><button id="bulk-preview" class="secondary">추가할 책 미리 확인</button><div id="bulk-preview-result"></div></section>
     <section class="panel"><h2>과거 장부</h2><input id="legacy-search" type="search" placeholder="과거 번호 · 제목 · 출판사 검색"><div id="legacy-list"></div></section>`;
   const quality=state.legacyRecords.filter(x=>x.reviewRequired);
   $('#queue').innerHTML=(state.reviewQueue.map((x,i)=>x.kind==='id-change'?`<div class="candidate"><strong>실물번호 변경 요청 · ${esc(x.entry?.oldPhysicalId)} → ${esc(x.entry?.physicalId)}</strong><p class="muted">${esc(x.entry?.titleRaw)} · 사용 이력을 다시 확인하세요.</p><select id="queue-mode-${i}"><option value="">처리 방법</option><option value="apply-id-change">번호 변경 적용</option><option value="dismiss">기존 번호 유지</option></select><label for="queue-id-${i}">최종 번호 · 직접 입력 가능</label><input id="queue-id-${i}" inputmode="numeric" value="${esc(x.entry?.physicalId)}"><button data-resolve="${i}">결정 저장</button></div>`:`<div class="candidate"><strong>${esc(x.entry?.titleCanonical||x.entry?.titleRaw)}</strong> · ${esc(x.entry?.physicalId||x.entry?.temporaryId||'')}<p class="muted">실물 여부와 번호를 확인한 뒤 결정하세요.</p><select id="queue-mode-${i}"><option value="">처리 방법</option>${x.entry?.physicalId?'':'<option value="link">기존 실물 연결</option>'}<option value="issue">신규 실물번호 확정</option><option value="dismiss">조사 기록만 보관</option></select><input id="queue-id-${i}" inputmode="numeric" placeholder="기존 실물번호 (연결 시)"><label for="queue-status-${i}">확정 후 상태</label><select id="queue-status-${i}">${['ACTIVE','DISCARDED','LOST','UNKNOWN'].map(s=>`<option value="${s}" ${s===(x.entry?.status==='UNKNOWN'?'ACTIVE':x.entry?.status)?'selected':''}>${statusName(s)}</option>`).join('')}</select><button data-resolve="${i}">결정 저장</button></div>`).join('')+quality.map((x,i)=>`<div class="candidate"><strong>${esc(x.legacyLedgerId)} · ${esc(x.titleCanonical)}</strong><p class="muted">권수 원문 ${esc(x.quantityRaw)} · 비고 원문 ${esc(x.noteRaw)} · ${esc(x.reviewReason)}</p><button class="secondary" data-quality="${i}">원문 확인 완료</button></div>`).join(''))||'<p class="muted">대기 중인 항목이 없습니다.</p>';
@@ -57,6 +58,22 @@ async function desktop(){
   click('#reset-catalog',resetCatalogDialog);
   $('#excel').onchange=run(async e=>{const f=e.target.files[0];if(!f)return;const result=await api('/api/excel',await f.arrayBuffer(),true);await desktop();notice(`${result.count}개의 장부 행을 원문과 함께 보존했습니다.`);});
   $('#result-excel').onchange=run(async e=>{const f=e.target.files[0];if(!f)return;const result=await api('/api/result-excel',await f.arrayBuffer(),true);await desktop();notice(`결과 Excel을 불러왔습니다. 실물 ${result.addedPhysical}권, 미확인 장부 ${result.addedLegacy}행 추가 · 기존 ${result.unchanged}행 유지 · 권 번호 ${result.filledVolumes}건 보완`);});
+  let bulkPreview=null;
+  click('#bulk-preview',async()=>{
+    const file=$('#bulk-file').files[0];
+    if(!file)throw Error('Excel 파일을 선택하세요.');
+    const start=$('#bulk-start').value,end=$('#bulk-end').value,sheet=$('#bulk-sheet').value.trim();
+    if(!start||!end)throw Error('시작 행과 끝 행을 입력하세요.');
+    const query=new URLSearchParams({start,end,sheet});
+    bulkPreview=await api('/api/physical/import-preview?'+query,await file.arrayBuffer(),true);
+    const rows=[...bulkPreview.first,...bulkPreview.last].filter((x,i,a)=>a.findIndex(y=>y.row===x.row)===i);
+    $('#bulk-preview-result').innerHTML=`<div class="notice-inline"><strong>${esc(bulkPreview.sheet)} · ${bulkPreview.start}~${bulkPreview.end}행 · ${bulkPreview.count}권 추가 예정</strong><p>기존 실물은 수정하지 않습니다. 번호=실물번호, 날짜=입수일, 도서명, 출판사, 비고를 가져옵니다.</p>${rows.map(x=>`<div>${x.row}행 · ${esc(x.id)} · ${esc(x.title)} · ${esc(x.date)}</div>`).join('')}<button id="bulk-apply">확인한 ${bulkPreview.count}권 추가</button></div>`;
+    click('#bulk-apply',async()=>{
+      const result=await api('/api/physical/import-apply',{token:bulkPreview.token,revision:bulkPreview.revision});
+      await desktop();notice(result.count+'권의 새 실물을 추가했습니다. 번호 '+result.firstId+' ~ '+result.lastId);
+    });
+  });
+  for(const selector of ['#bulk-file','#bulk-sheet','#bulk-start','#bulk-end'])$(selector).addEventListener('input',()=>{$('#bulk-preview-result').innerHTML='';bulkPreview=null;});
   click('#create',async()=>{await api('/api/session',{worker:$('#worker').value,area:$('#area').value});await desktop();notice('조사용 데이터를 생성했습니다.');});
   click('#package',()=>download(latest,`survey-package-${latest.id}.json`));
   $('#json').onchange=run(async e=>{const files=[...e.target.files];if(!files.length)return;reportQueue=await Promise.all(files.map(async file=>({name:file.name,value:JSON.parse(await file.text())})));await showNextReport();});
@@ -179,7 +196,7 @@ function pcEditDialog(id){
 
 const surveyKey=id=>`angela-survey-v2:${id}`;
 function saveSurvey(next){localStorage.setItem(surveyKey(next.id),JSON.stringify(next));survey=next;}
-function loadPackage(value){if(value?.schema!=='angela-package/v2'||!value.id||!value.catalogId||!Array.isArray(value.legacyRecords)||!Array.isArray(value.physicalBooks))throw Error('조사용 JSON v2가 아닙니다.');const previous=localStorage.getItem(surveyKey(value.id));if(previous&&JSON.parse(previous).entries?.length)throw Error('이 조사본의 저장된 기록이 있습니다. 기존 조사 계속하기를 사용하세요.');saveSurvey({...value,reportId:crypto.randomUUID(),entries:[],savedAt:null});if(!nativeApp)history.replaceState(null,'',`/mobile?session=${encodeURIComponent(value.id)}`);mobileRender();}
+function loadPackage(value){if(value?.schema!=='angela-package/v2'||!value.id||!value.catalogId||!Array.isArray(value.legacyRecords)||!Array.isArray(value.physicalBooks))throw Error('조사용 JSON v2가 아닙니다.');const previous=localStorage.getItem(surveyKey(value.id));if(previous&&JSON.parse(previous).entries?.length)throw Error('이 조사본의 저장된 기록이 있습니다. 기존 조사 계속하기를 사용하세요.');saveSurvey({...value,reportId:crypto.randomUUID(),entries:[],savedAt:null,receivedAt:new Date().toISOString()});if(!nativeApp)history.replaceState(null,'',`/mobile?session=${encodeURIComponent(value.id)}`);mobileRender();}
 window.angelaOpenPackage=text=>{try{loadPackage(JSON.parse(text));}catch(e){notice(e.message,true);}};
 window.angelaPackageError=message=>notice(message||'조사 파일을 열 수 없습니다.',true);
 window.angelaFileSaved=()=>notice('조사 결과 파일을 저장했습니다.');
@@ -187,14 +204,25 @@ window.angelaHandleBack=()=>{if(dialog.open){dialog.close();return true;}if(nati
 async function mobile(){
   const id=new URLSearchParams(location.search).get('session');
   if(!id){app.innerHTML=`<div class="mobile-wrap"><h1>현장 도서 조사</h1><section class="panel">${nativeApp?'<button id="open-package">PC에서 받은 조사 파일 열기</button>':'<label for="package-file">조사용 JSON 열기</label><input id="package-file" type="file" accept=".json">'}<div id="drafts"></div></section></div>`;
-    $('#drafts').innerHTML=Object.keys(localStorage).filter(x=>x.startsWith('angela-survey-v2:')).map(x=>{try{const s=JSON.parse(localStorage.getItem(x));return `<button class="session-link secondary" data-draft="${esc(s.id)}">${esc(s.createdAt)} · ${s.entries.length}권 조사 계속하기</button>`;}catch{return '';}}).join('');
+    const drafts=Object.keys(localStorage).filter(x=>x.startsWith('angela-survey-v2:')).flatMap(key=>{try{const value=JSON.parse(localStorage.getItem(key));return value?.id?[{key,value}]:[];}catch{return [];}});
+    drafts.sort((a,b)=>Date.parse(b.value.receivedAt||b.value.createdAt||0)-Date.parse(a.value.receivedAt||a.value.createdAt||0));
+    $('#drafts').innerHTML=drafts.map(({value:s})=>`<div class="candidate"><button class="session-link secondary" data-draft="${esc(s.id)}">${esc(s.receivedAt||s.createdAt||'받은 날짜 없음')} · ${s.entries?.length||0}권 조사 계속하기</button><button class="danger" data-delete-draft="${esc(s.id)}">이 조사 기록 삭제</button></div>`).join('');
     document.querySelectorAll('[data-draft]').forEach(el=>el.onclick=()=>{survey=JSON.parse(localStorage.getItem(surveyKey(el.dataset.draft)));if(!survey.reportId)survey.reportId=crypto.randomUUID();saveSurvey(survey);mobileRender();});
+    document.querySelectorAll('[data-delete-draft]').forEach(el=>el.onclick=()=>deleteSurveyDialog(el.dataset.deleteDraft));
     if(nativeApp)click('#open-package',()=>window.AngelaAndroid.openPackage());
     else $('#package-file').onchange=run(async e=>loadPackage(JSON.parse(await e.target.files[0].text())));return;}
   const cached=localStorage.getItem(surveyKey(id));survey=cached?JSON.parse(cached):{...await api(`/api/session/${id}`),reportId:crypto.randomUUID(),entries:[],savedAt:null};
   if(!survey.reportId)survey.reportId=crypto.randomUUID();
   if(survey.schema!=='angela-package/v2')throw Error('이전 조사 형식입니다. PC에서 새 조사를 생성하세요.');
   saveSurvey(survey);mobileRender();
+}
+function deleteSurveyDialog(id){
+  const saved=localStorage.getItem(surveyKey(id));if(!saved)return;
+  const item=JSON.parse(saved);
+  dialog.innerHTML=`<form id="delete-survey-form"><h2>조사 기록 삭제</h2><p><strong>이 휴대전화에 저장된 조사 ${esc(item.receivedAt||item.createdAt||id)}의 ${item.entries?.length||0}권 기록이 모두 제거됩니다.</strong></p><p class="muted">삭제한 기록은 앱에서 되돌릴 수 없습니다. PC로 보낸 결과 파일은 따로 보관됩니다.</p><label for="delete-survey-word">정말 제거하려면 삭제를 입력하세요</label><input id="delete-survey-word" autocomplete="off" required><div class="actions"><button type="button" id="delete-survey-cancel" class="secondary">취소</button><button type="submit" class="danger">기록 제거</button></div></form>`;
+  click('#delete-survey-cancel',()=>dialog.close());
+  $('#delete-survey-form').onsubmit=run(async event=>{event.preventDefault();if($('#delete-survey-word').value.trim()!=='삭제')throw Error('삭제를 정확히 입력하세요.');localStorage.removeItem(surveyKey(id));if(survey?.id===id)survey=null;dialog.close();await mobile();notice('휴대전화의 조사 기록을 삭제했습니다.');});
+  dialog.showModal();
 }
 function mobileRender(){
   app.innerHTML=`<div class="mobile-wrap"><div class="lead"><div><div class="eyebrow">FIELD SURVEY</div><h1>실물 한 권씩 조사</h1><p class="muted">${esc(survey.worker||'작업자 미기재')} · ${esc(survey.area||'구역 미기재')} · ${survey.entries.length}권 기록</p></div><span class="saved">${survey.savedAt?'기기에 저장됨':'조사 준비 완료'}</span></div>${nativeApp?'<button id="home" class="secondary">조사 목록 / 새 파일 열기</button>':''}
@@ -328,6 +356,7 @@ function entryDialog(noLabel=false,existing=null,legacy=null,options={}){
     const linked=legacy?survey.physicalBooks.filter(x=>x.legacyRecordId===legacy.recordId):[];
     const related=[...new Map([...linked,...physical].map(x=>[x.physicalId,x])).values()];
     if(!legacy&&!candidates.length){$('#duplicate-warning').innerHTML='';return;}
+    const previousChoice=$('#duplicate-choice')?.value||'';
     const choices='<option value="">선택하세요</option>'+
       (legacy?'<option value="ledger">선택한 장부의 같은 책 · 실제 번호로 연결</option>':'')+
       (!noLabel&&survey.physicalBooks.length?'<option value="renumber">기존 실물의 저장 번호를 실제 번호로 수정</option>':'')+
@@ -338,6 +367,8 @@ function entryDialog(noLabel=false,existing=null,legacy=null,options={}){
       candidateList(candidates,'후보')+'<label for="duplicate-choice">이 책의 처리</label><select id="duplicate-choice" required>'+choices+'</select>'+
       '<div id="renumber-fields" hidden><label for="stored-physical">현재 저장된 실물번호</label><input id="stored-physical" inputmode="numeric" maxlength="9" placeholder="YYYY-NNNN"><p class="muted">같은 책의 저장 번호를 입력하고, 실제 책에 적힌 번호로 수정합니다. PC에서 최종 확인합니다.</p>'+picks+'</div>'+
       (noLabel?'<input id="candidate-physical" inputmode="numeric" placeholder="기존 실물번호 (기존 실물 연결 시)">':'')+'</div>';
+    if(previousChoice&&[...$('#duplicate-choice').options].some(x=>x.value===previousChoice))$('#duplicate-choice').value=previousChoice;
+    else if(legacy)$('#duplicate-choice').value='ledger';
     $('#duplicate-choice').onchange=()=>{$('#renumber-fields').hidden=$('#duplicate-choice').value!=='renumber';};
     document.querySelectorAll('[data-stored-id]').forEach(el=>el.onclick=()=>{$('#stored-physical').value=el.dataset.storedId;});
     formatIdField($('#stored-physical'));formatIdField($('#candidate-physical'));

@@ -191,6 +191,29 @@ export function addNewAcquisition(db,input){
   next.revision++;
   return {next,ids};
 }
+export function importPhysicalRows(db,rows){
+  insist(Array.isArray(rows)&&rows.length>0,'가져올 도서 행이 없습니다.');
+  const next=structuredClone(db),seen=new Set(),stamp=now(),ids=[];
+  for(const row of rows){
+    const at=`${row.sourceSheet} ${row.sourceRow}행`;
+    let id;
+    try{id=normalizePhysicalId(row.legacyLedgerId);}catch{fail(`${at}: 번호는 YYYY-NNNN 형식이어야 합니다.`);}
+    insist(!seen.has(id),`${at}: 파일에서 실물번호 ${id}가 중복됩니다.`);
+    insist(!isPhysicalIdAlreadyIssued(next,id),`${at}: 실물번호 ${id}가 이미 등록되거나 발급되었습니다.`);
+    insist(canonical(row.titleRaw),`${at}: 도서명이 비어 있습니다.`);
+    const date=String(row.registeredDateRaw??'').trim();
+    insist(!date||/^\d{4}[-.]\d{2}[-.]\d{2}\.?$/.test(date),`${at}: 날짜 형식을 확인하세요.`);
+    const note=String(row.noteRaw??'').trim();
+    insist(note.length<=2000,`${at}: 비고는 2000자 이하로 입력하세요.`);
+    const matches=next.legacyRecords.filter(x=>x.legacyLedgerId===id&&searchKey(x.titleRaw)===searchKey(row.titleRaw));
+    const legacyRecordId=matches.length===1?matches[0].recordId:null;
+    next.physicalBooks.push({physicalId:id,temporaryId:null,legacyRecordId,...clean('title',row.titleRaw),...publisherFields(next,row.publisherRaw),volume:'',quantity:1,status:'ACTIVE',labelStatus:'UNKNOWN',note:'',noteRaw:note,noteRawOverride:true,acquiredDateRaw:date,version:1,createdAt:stamp,updatedAt:stamp,discardedAt:null,authorRaw:'',locationRaw:''});
+    next.issuedIds.push(id);next.statusHistory.push({physicalId:id,from:null,to:'ACTIVE',at:stamp,sessionId:null});
+    seen.add(id);ids.push(id);
+  }
+  next.revision++;
+  return {next,ids};
+}
 export function editPhysicalBook(db,oldPhysicalId,input){
   const next=structuredClone(db),oldId=normalizePhysicalId(oldPhysicalId),index=next.physicalBooks.findIndex(x=>x.physicalId===oldId);
   insist(index>=0,'수정할 실물을 찾을 수 없습니다.');

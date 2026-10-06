@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir,readFile} from 'node:fs/promises';
-import {emptyDb,addNewAcquisition,editPhysicalBook,createSession,inspectSurvey,applySurvey} from '../inventory.mjs';
+import {emptyDb,addNewAcquisition,importPhysicalRows,editPhysicalBook,createSession,inspectSurvey,applySurvey} from '../inventory.mjs';
 import {reserveNextPhysicalIds} from '../physical-id.mjs';
 import {makeInventoryExcel} from '../inventory-excel.mjs';
 import {unzip} from '../xlsx-native.mjs';
@@ -64,4 +64,21 @@ test('결과 Excel은 실물 한 권당 한 행과 요청한 일곱 열만 제�
   assert.ok(xml.includes('2026-0024'));
   assert.ok(xml.includes('보유 중'));
   assert.doesNotMatch(xml,/매수/);
+});
+test('과거 Excel 행을 새 실물로만 일괄 추가하고 원문 필드를 보존한다',()=>{
+  const db=seeded();
+  const rows=[{sourceSheet:'도서목록',sourceRow:1457,legacyLedgerId:'2026-0037',registeredDateRaw:'2026.10.01',titleRaw:'새 책 1',publisherRaw:'웅진북클럽',noteRaw:'기증 A'},
+    {sourceSheet:'도서목록',sourceRow:1458,legacyLedgerId:'2026-0038',registeredDateRaw:'2026.10.01',titleRaw:'새 책 2',publisherRaw:'웅진북클럽',noteRaw:''}];
+  const {next,ids}=importPhysicalRows(db,rows);
+  assert.deepEqual(ids,['2026-0037','2026-0038']);
+  assert.equal(db.physicalBooks.length,0);
+  assert.equal(next.physicalBooks.length,2);
+  assert.equal(next.physicalBooks[0].acquiredDateRaw,'2026.10.01');
+  assert.equal(next.physicalBooks[0].noteRaw,'기증 A');
+  assert.equal(next.physicalBooks[0].status,'ACTIVE');
+  assert.deepEqual(next.issuedIds,['2026-0023',...ids]);
+  assert.throws(()=>importPhysicalRows(next,rows),/이미 등록되거나 발급/);
+  assert.throws(()=>importPhysicalRows(db,[rows[0],{...rows[1],legacyLedgerId:'2026-0037'}]),/중복/);
+  assert.throws(()=>importPhysicalRows(db,[{...rows[0],legacyLedgerId:'잘못된 번호'}]),/YYYY-NNNN/);
+  assert.equal(db.physicalBooks.length,0);
 });

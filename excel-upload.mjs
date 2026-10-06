@@ -21,7 +21,7 @@ export async function readExcelUpload(raw){
   try{
     await fs.writeFile(source,raw);
     if(old){
-      try{await run('powershell.exe',['-NoProfile','-NonInteractive','-File',script,'-Source',source,'-Destination',converted],{timeout:120000,windowsHide:true});}
+      try{await run('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-Source',source,'-Destination',converted],{timeout:120000,windowsHide:true});}
       catch(e){throw Error(`.xls 변환에 실패했습니다. PC에 Microsoft Excel이 설치되어 있는지 확인하세요. ${e.message}`);}
     }
     return await readLedger(old?converted:source);

@@ -8,3 +8,5 @@
 .review-context{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}.review-context>div{padding:12px;border:1px solid #dbe3ed;border-radius:8px;background:#f8fbff;overflow-wrap:anywhere}.review-context span{display:block;color:#62748a;font-size:12px}.review-context strong{display:block;margin-top:5px;font-size:17px}.review-candidates{max-height:120px;overflow:auto;margin:14px 0;padding:10px;background:#fffbf4;border-radius:8px}.review-candidates p{margin:4px 0;font-size:14px}
 
 .key-hint{display:inline-block;font-size:11px;font-weight:600;line-height:1.2;padding:3px 5px;border:1px solid currentColor;border-radius:4px;opacity:.85;white-space:nowrap}
+
+.bulk-range{display:grid;grid-template-columns:1fr 1fr;gap:12px}.mobile-wrap #drafts .candidate button{width:100%}.mobile-wrap #drafts .candidate button.danger{margin-top:8px}
