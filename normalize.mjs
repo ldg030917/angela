@@ -58,6 +58,16 @@ export function search(query, items, limit=20) {
   return items.map(item=>({item,score:rank(query,item)})).filter(x=>x.score>0)
     .sort((a,b)=>b.score-a.score).slice(0,limit).map(x=>({...x.item,matchScore:x.score}));
 }
+export function physicalCandidatesForLegacy(legacy,books,title,publisher,volume=''){
+  const titleKey=searchKey(title||legacy?.titleRaw),publisherKey=searchKey(publisher||legacy?.publisherRaw),volumeKey=searchKey(volume);
+  const linked=legacy?books.filter(x=>x.legacyRecordId===legacy.recordId):[];
+  const exact=titleKey?books.filter(x=>searchKey(x.titleRaw||x.titleCanonical)===titleKey&&(!publisherKey||searchKey(x.publisherRaw||x.publisherCanonical)===publisherKey)&&searchKey(x.volume||'')===volumeKey):[];
+  const similar=titleKey?search(title||legacy?.titleRaw,books,8).filter(x=>x.matchScore>=55):[];
+  const candidates=[...new Map([...linked,...exact,...similar].map(x=>[x.physicalId,x])).values()];
+  const matchingLinked=linked.filter(x=>searchKey(x.volume||'')===volumeKey);
+  const preferred=matchingLinked.length===1?matchingLinked[0]:matchingLinked.length?null:exact.length===1?exact[0]:null;
+  return {candidates,preferredPhysicalId:preferred?.physicalId||null};
+}
 export function publisherDictionary(records, books) {
   const map=new Map();
   for(const row of [...records,...books]) {

@@ -1,4 +1,4 @@
-import {canonical,search,searchKey,publisherDictionary} from './normalize.mjs';
+import {canonical,search,searchKey,publisherDictionary,physicalCandidatesForLegacy} from './normalize.mjs';
 import {formatPhysicalIdInput,normalizePhysicalId,isPhysicalIdAlreadyIssued,reserveNextPhysicalIds} from './physical-id.mjs';
 import {statusName} from './status.mjs';
 
@@ -342,45 +342,57 @@ function entryDialog(noLabel=false,existing=null,legacy=null,options={}){
     <label for="title">도서명</label><input id="title" name="titleRaw" required autocomplete="off" value="${esc(existing?.titleRaw||legacy?.titleRaw||'')}">
     <label for="publisher">출판사</label><input id="publisher" name="publisherRaw" autocomplete="off" value="${esc(existing?.publisherRaw||legacy?.publisherRaw||'')}"><div id="publisher-suggestions"></div>
     <label for="volume">권 번호 (알고 있는 경우)</label><input id="volume" name="volume" value="${esc(existing?.volume||'')}">
-    <label>입수일 · 조회 전용</label><div class="read-value">${esc(existing?.acquiredDateRaw||legacy?.registeredDateRaw||'기록 없음')}</div>
+    <label>입수일 · 조회 전용</label><div id="entry-acquired-date" class="read-value">${esc(existing?.acquiredDateRaw||legacy?.registeredDateRaw||'기록 없음')}</div>
     <label for="legacy">과거 장부 연결</label><select id="legacy" name="legacyRecordId"><option value="">연결하지 않음</option>${survey.legacyRecords.map(x=>`<option value="${esc(x.recordId)}" ${x.recordId===(legacy?.recordId||existing?.legacyRecordId)?'selected':''}>${esc(label(x))}</option>`).join('')}</select>
     <label for="status">실물 상태</label><select id="status" name="status">${['ACTIVE','DISCARDED','LOST','UNKNOWN'].map(x=>`<option value="${x}" ${x===(existing?.status||(noLabel?'UNKNOWN':'ACTIVE'))?'selected':''}>${statusName(x)}</option>`).join('')}</select>
     <div id="duplicate-warning"></div><div class="actions"><button type="button" id="cancel" class="secondary">취소</button><button type="submit">후보 확인 후 저장</button></div></form>`;
   click('#cancel',()=>dialog.close());click('#new-from-unlabelled',()=>{dialog.close();mobileAcquisitionDialog();});
   const form=$('#entry-form');
+  let lastLookup=JSON.stringify([$('#legacy').value,searchKey($('#title').value),searchKey($('#publisher').value),searchKey($('#volume').value)]),statusTouched=false;
+  $('#status').onchange=()=>{statusTouched=true;};
   const preview=()=>{
     if(existing){$('#duplicate-warning').innerHTML='';return;}
     const q=$('#title').value;
+    const selectedLegacy=survey.legacyRecords.find(x=>x.recordId===$('#legacy').value)||null;
+    $('#entry-acquired-date').textContent=selectedLegacy?.registeredDateRaw||'기록 없음';
     const candidates=search(q,[...survey.physicalBooks,...survey.legacyRecords],5).filter(x=>x.matchScore>=55);
-    const physical=search(q,survey.physicalBooks,5).filter(x=>x.matchScore>=55);
-    const linked=legacy?survey.physicalBooks.filter(x=>x.legacyRecordId===legacy.recordId):[];
-    const related=[...new Map([...linked,...physical].map(x=>[x.physicalId,x])).values()];
-    if(!legacy&&!candidates.length){$('#duplicate-warning').innerHTML='';return;}
+    if(!selectedLegacy&&!candidates.length){$('#duplicate-warning').innerHTML='';return;}
     const previousChoice=$('#duplicate-choice')?.value||'';
+    const lookup=JSON.stringify([$('#legacy').value,searchKey(q),searchKey($('#publisher').value),searchKey($('#volume').value)]);
+    const previousRelated=lastLookup===lookup?$('#related-physical')?.value||'':'';
+    lastLookup=lookup;
+    const {candidates:related,preferredPhysicalId}=physicalCandidatesForLegacy(selectedLegacy,survey.physicalBooks,q,$('#publisher').value,$('#volume').value);
     const choices='<option value="">선택하세요</option>'+
-      (legacy?'<option value="ledger">선택한 장부의 같은 책 · 실제 번호로 연결</option>':'')+
-      (!noLabel&&survey.physicalBooks.length?'<option value="renumber">기존 실물의 저장 번호를 실제 번호로 수정</option>':'')+
+      (!noLabel&&selectedLegacy?'<option value="ledger">과거 장부와 연결/실제 번호 수정</option>':'')+
       '<option value="distinct">다른 책 / 신규 실물로 기록</option><option value="uncertain">확실하지 않음 / PC 검토</option>'+
       (noLabel?'<option value="existing">기존 항목이 맞음 · 연결</option>':'');
-    const picks=related.map(x=>'<button type="button" class="secondary" data-stored-id="'+esc(x.physicalId)+'">'+esc(x.physicalId+' · '+x.titleCanonical)+'</button>').join('');
-    $('#duplicate-warning').innerHTML='<div class="notice-inline"><strong>선택한 장부와 비슷한 책을 확인하세요. 자동 병합하지 않습니다.</strong>'+
+    const relatedChoices=related.length?'<label for="related-physical">같은 책의 기존 실물</label><select id="related-physical"><option value="">기존 실물을 확인하세요</option><option value="new">같은 책의 기존 실물 없음 · 새 실물 생성</option>'+
+      related.map(x=>'<option value="'+esc(x.physicalId)+'">'+esc(x.physicalId+' · '+x.titleCanonical+(x.legacyRecordId===selectedLegacy?.recordId?' · 이 장부에 연결됨':''))+'</option>').join('')+'</select><p class="muted">같은 책의 기존 실물이 있으면 선택하세요. 기존 실물의 도서명·출판사·권 번호는 유지하며, 제목이 비슷한 다른 책이면 새 실물 생성을 선택합니다.</p>':'<p class="muted">연결된 기존 실물이 없어 새 실물로 기록합니다.</p>';
+    $('#duplicate-warning').innerHTML='<div class="notice-inline"><strong>후보가 같은 책인지 확인하세요. 자동 병합하지 않습니다.</strong>'+
       candidateList(candidates,'후보')+'<label for="duplicate-choice">이 책의 처리</label><select id="duplicate-choice" required>'+choices+'</select>'+
-      '<div id="renumber-fields" hidden><label for="stored-physical">현재 저장된 실물번호</label><input id="stored-physical" inputmode="numeric" maxlength="9" placeholder="YYYY-NNNN"><p class="muted">같은 책의 저장 번호를 입력하고, 실제 책에 적힌 번호로 수정합니다. PC에서 최종 확인합니다.</p>'+picks+'</div>'+
+      (!noLabel&&selectedLegacy?'<div id="ledger-fields">'+relatedChoices+'</div>':'')+
       (noLabel?'<input id="candidate-physical" inputmode="numeric" placeholder="기존 실물번호 (기존 실물 연결 시)">':'')+'</div>';
     if(previousChoice&&[...$('#duplicate-choice').options].some(x=>x.value===previousChoice))$('#duplicate-choice').value=previousChoice;
-    else if(legacy)$('#duplicate-choice').value='ledger';
-    $('#duplicate-choice').onchange=()=>{$('#renumber-fields').hidden=$('#duplicate-choice').value!=='renumber';};
-    document.querySelectorAll('[data-stored-id]').forEach(el=>el.onclick=()=>{$('#stored-physical').value=el.dataset.storedId;});
-    formatIdField($('#stored-physical'));formatIdField($('#candidate-physical'));
+    else if(selectedLegacy&&!noLabel)$('#duplicate-choice').value='ledger';
+    if($('#related-physical')){
+      if(previousRelated&&[...$('#related-physical').options].some(x=>x.value===previousRelated))$('#related-physical').value=previousRelated;
+      else if(preferredPhysicalId)$('#related-physical').value=preferredPhysicalId;
+    }
+    const sync=()=>{if($('#ledger-fields'))$('#ledger-fields').hidden=$('#duplicate-choice').value!=='ledger';const relatedId=$('#duplicate-choice').value==='ledger'?$('#related-physical')?.value:null;const relatedBook=survey.physicalBooks.find(x=>x.physicalId===relatedId);if(!statusTouched)$('#status').value=relatedBook?.status||'ACTIVE';updateOccupancy();};
+    $('#duplicate-choice').onchange=sync;$('#related-physical')?.addEventListener('change',updateOccupancy);sync();
+    formatIdField($('#candidate-physical'));
   };
-  const suggestPublisher=()=>{const q=searchKey($('#publisher').value);$('#publisher-suggestions').innerHTML=q?publishers.filter(x=>x.id.includes(q)||q.includes(x.id)).slice(0,5).map((x,i)=>`<button type="button" class="secondary" data-publisher="${i}">${esc(x.canonicalName)}${x.aliases.length>1?` · ${x.aliases.length}개 표기`:''}</button>`).join(''):'';const matches=publishers.filter(x=>x.id.includes(q)||q.includes(x.id)).slice(0,5);document.querySelectorAll('[data-publisher]').forEach(el=>el.onclick=()=>{$('#publisher').value=matches[Number(el.dataset.publisher)].canonicalName;$('#publisher-suggestions').innerHTML='';});};
+  const suggestPublisher=()=>{const q=searchKey($('#publisher').value);$('#publisher-suggestions').innerHTML=q?publishers.filter(x=>x.id.includes(q)||q.includes(x.id)).slice(0,5).map((x,i)=>`<button type="button" class="secondary" data-publisher="${i}">${esc(x.canonicalName)}${x.aliases.length>1?` · ${x.aliases.length}개 표기`:''}</button>`).join(''):'';const matches=publishers.filter(x=>x.id.includes(q)||q.includes(x.id)).slice(0,5);document.querySelectorAll('[data-publisher]').forEach(el=>el.onclick=()=>{$('#publisher').value=matches[Number(el.dataset.publisher)].canonicalName;$('#publisher-suggestions').innerHTML='';preview();});};
   const updateOccupancy=()=>{
     const field=$('#physical-id'),message=$('#physical-id-check');
     if(!field||!message)return;
     let id;try{id=normalizePhysicalId(field.value);}catch{message.textContent='실제 책에 적힌 번호를 YYYY-NNNN 형식으로 입력하세요.';return;}
-    const conflict=id===existing?.physicalId?'':physicalIdConflict(id,existing?.physicalId);
+    const relatedId=$('#duplicate-choice')?.value==='ledger'?$('#related-physical')?.value:null;
+    const source=relatedId&&relatedId!=='new'?survey.physicalBooks.find(x=>x.physicalId===relatedId):null;
+    const sourceId=existing?.physicalId||source?.physicalId;
+    const conflict=id===sourceId?'':physicalIdConflict(id,sourceId);
     message.className=conflict?'id-conflict':'muted';
-    message.textContent=id===existing?.physicalId?'현재 저장된 번호입니다.':conflict||'다른 실물에 지정되지 않은 번호입니다. PC 반영 시 다시 검사합니다.';
+    message.textContent=id===sourceId?'현재 저장된 번호입니다.':conflict||'다른 실물에 지정되지 않은 번호입니다. PC 반영 시 다시 검사합니다.';
   };
   formatIdField($('#physical-id'));
   if(existing){
@@ -396,21 +408,35 @@ function entryDialog(noLabel=false,existing=null,legacy=null,options={}){
     $('#existing-action').onchange=syncAction;syncAction();
   }
   $('#physical-id')?.addEventListener('input',updateOccupancy);updateOccupancy();
-  $('#title').oninput=preview;$('#publisher').oninput=suggestPublisher;preview();suggestPublisher();
-  form.onsubmit=run(async event=>{event.preventDefault();const f=new FormData(form),action=existing?$('#existing-action').value:null,id=noLabel?null:normalizePhysicalId(f.get('physicalId'));
-    if(action==='CHANGE_PHYSICAL_ID'&&id===existing.physicalId)throw Error('기존 번호와 다른 새 실물번호를 입력하세요.');
-    if(id&&id!==existing?.physicalId){const conflict=physicalIdConflict(id,existing?.physicalId);if(conflict)throw Error(conflict);}
-    const choice=$('#duplicate-choice')?.value;if($('#duplicate-choice')&&!choice)throw Error('유사 도서 후보를 확인하고 처리 방법을 선택하세요.');
-    if(choice==='renumber'){
-      const oldId=normalizePhysicalId($('#stored-physical').value),old=survey.physicalBooks.find(x=>x.physicalId===oldId);
-      if(!old)throw Error('현재 저장된 실물번호를 확인하세요.');
-      if(id===oldId)throw Error('실제 번호와 저장된 번호가 같습니다.');
-      dialog.close();entryDialog(false,old,legacy,{action:'CHANGE_PHYSICAL_ID',actualId:id});return;
+  $('#title').oninput=preview;$('#publisher').oninput=()=>{suggestPublisher();preview();};$('#volume').oninput=preview;$('#legacy').onchange=preview;preview();suggestPublisher();
+  form.onsubmit=run(async event=>{
+    event.preventDefault();
+    const f=new FormData(form),id=noLabel?null:normalizePhysicalId(f.get('physicalId'));
+    const choice=$('#duplicate-choice')?.value;
+    if($('#duplicate-choice')&&!choice)throw Error('유사 도서 후보를 확인하고 처리 방법을 선택하세요.');
+    const selectedLegacy=survey.legacyRecords.find(x=>x.recordId===f.get('legacyRecordId'))||null;
+    let source=existing||null,action=existing?$('#existing-action').value:null;
+    if(choice==='ledger'){
+      if(!selectedLegacy||noLabel)throw Error('연결할 과거 장부와 실제 번호를 확인하세요.');
+      const relatedChoice=$('#related-physical')?$('#related-physical').value:'new';
+      if(!relatedChoice)throw Error('같은 책의 기존 실물을 선택하거나 새 실물 생성을 선택하세요.');
+      source=relatedChoice==='new'?null:survey.physicalBooks.find(x=>x.physicalId===relatedChoice);
+      if(relatedChoice!=='new'&&!source)throw Error('선택한 기존 실물을 찾을 수 없습니다.');
+      if(source&&canonical(source.volume)&&canonical(f.get('volume'))&&searchKey(source.volume)!==searchKey(f.get('volume')))throw Error('선택한 실물의 권 번호가 다릅니다. 같은 권을 선택하거나 새 실물 생성을 선택하세요.');
     }
+    const titleRaw=source&&choice==='ledger'&&canonical(f.get('titleRaw'))===canonical(selectedLegacy?.titleRaw)?source.titleRaw:String(f.get('titleRaw'));
+    const publisherRaw=source&&choice==='ledger'&&canonical(f.get('publisherRaw'))===canonical(selectedLegacy?.publisherRaw)?source.publisherRaw:String(f.get('publisherRaw')||'');
+    const volume=source&&choice==='ledger'&&!canonical(f.get('volume'))?source.volume||'':String(f.get('volume')||'');
+    if(choice==='ledger'&&source)action=id===source.physicalId?
+      (canonical(titleRaw)===canonical(source.titleRaw)&&canonical(publisherRaw)===canonical(source.publisherRaw)&&canonical(volume)===canonical(source.volume||'')?'CONFIRM':'UPDATE_INFO'):
+      'CHANGE_PHYSICAL_ID';
+    if(action==='CHANGE_PHYSICAL_ID'&&id===source?.physicalId)throw Error('기존 번호와 다른 새 실물번호를 입력하세요.');
+    if(id&&id!==source?.physicalId){const conflict=physicalIdConflict(id,source?.physicalId);if(conflict)throw Error(conflict);}
     let physicalId=id,temporaryId=null;
     if(noLabel){temporaryId=`temp-${crypto.randomUUID()}`;if(choice==='existing'){physicalId=normalizePhysicalId($('#candidate-physical').value);if(!survey.physicalBooks.some(x=>x.physicalId===physicalId))throw Error('기존 실물번호를 확인하세요.');temporaryId=null;}}
-    const entry={physicalId,oldPhysicalId:action==='CHANGE_PHYSICAL_ID'?existing.physicalId:null,action,temporaryId,isNew:!existing&&!(noLabel&&choice==='existing'),titleRaw:f.get('titleRaw'),publisherRaw:f.get('publisherRaw')||'',volume:f.get('volume')||'',acquiredDateRaw:existing?.acquiredDateRaw||(choice==='distinct'?'':survey.legacyRecords.find(x=>x.recordId===f.get('legacyRecordId'))?.registeredDateRaw||''),legacyRecordId:choice==='distinct'&&legacy?null:f.get('legacyRecordId')||null,status:action==='CHANGE_PHYSICAL_ID'?existing.status:f.get('status'),labelStatus:noLabel?'MISSING':'PRESENT',note:existing?.note||'',recordedAt:new Date().toISOString(),candidateChoice:choice||null};
-    const next=structuredClone(survey),index=next.entries.findIndex(x=>existing?(x.oldPhysicalId===existing.physicalId||x.physicalId===existing.physicalId):(x.physicalId&&x.physicalId===physicalId));
+    const oldPhysicalId=action==='CHANGE_PHYSICAL_ID'?source.physicalId:null;
+    const entry={physicalId,oldPhysicalId,action,temporaryId,isNew:!source&&!(noLabel&&choice==='existing'),titleRaw,publisherRaw,volume,acquiredDateRaw:source?.acquiredDateRaw||(choice==='distinct'?'':selectedLegacy?.registeredDateRaw||''),legacyRecordId:choice==='distinct'?null:selectedLegacy?.recordId||null,status:action==='CHANGE_PHYSICAL_ID'?source.status:f.get('status'),labelStatus:noLabel?'MISSING':'PRESENT',note:source?.note||'',recordedAt:new Date().toISOString(),candidateChoice:choice||null};
+    const next=structuredClone(survey),index=next.entries.findIndex(x=>source?(x.oldPhysicalId===source.physicalId||x.physicalId===source.physicalId):(x.physicalId&&x.physicalId===physicalId));
     if(index>=0)next.entries[index]=entry;else next.entries.push(entry);
     next.savedAt=new Date().toISOString();saveSurvey(next);dialog.close();mobileRender();notice('조사 기록을 기기에 저장했습니다.');
   });

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {normalizePhysicalId,formatPhysicalIdInput,validatePhysicalId,isPhysicalIdAlreadyIssued} from '../physical-id.mjs';
-import {search} from '../normalize.mjs';
+import {search,physicalCandidatesForLegacy} from '../normalize.mjs';
 import {statusName} from '../status.mjs';
 import {emptyDb,createSession,inspectSurvey,applySurvey,resolveReview} from '../inventory.mjs';
 
@@ -89,4 +89,23 @@ test('과거 장부에서 찾은 기존 실물의 번호를 바꾸며 장부 연
   const later=createSession(next);next.sessions.push(later);
   const reuse={schema:'angela-survey/v2',catalogId:'catalog',sessionId:later.id,entries:[{physicalId:'2019-0034',temporaryId:null,isNew:true,titleRaw:'다른 책',publisherRaw:'출판사',status:'ACTIVE',labelStatus:'PRESENT'}]};
   assert.throws(()=>inspectSurvey(next,reuse),/이미 발급/);
+});
+
+test('통합 장부 연결은 기존 실물이 하나면 선택하고 없으면 신규로 남긴다',()=>{
+  const legacy={recordId:'ledger-a',titleRaw:'어린 왕자',publisherRaw:'문학동네'};
+  assert.deepEqual(physicalCandidatesForLegacy(legacy,[],'어린 왕자','문학동네'),{candidates:[],preferredPhysicalId:null});
+  const linked={...book('2019-0034'),legacyRecordId:'ledger-a'};
+  assert.equal(physicalCandidatesForLegacy(legacy,[linked],'어린 왕자','문학동네').preferredPhysicalId,'2019-0034');
+  assert.equal(physicalCandidatesForLegacy(legacy,[{...linked,volume:'1'}],'어린 왕자','문학동네','2').preferredPhysicalId,null);
+  const unlinked=book('2019-0035');
+  assert.equal(physicalCandidatesForLegacy(legacy,[unlinked],'어린 왕자','문학동네').preferredPhysicalId,'2019-0035');
+  const ambiguous=physicalCandidatesForLegacy(legacy,[unlinked,book('2019-0036')],'어린 왕자','문학동네');
+  assert.equal(ambiguous.preferredPhysicalId,null);
+  assert.deepEqual(ambiguous.candidates.map(x=>x.physicalId),['2019-0035','2019-0036']);
+  const fuzzy=physicalCandidatesForLegacy(legacy,[{...unlinked,titleRaw:'어린 왕자 개정판',titleCanonical:'어린 왕자 개정판'}],'어린 왕자','문학동네');
+  assert.equal(fuzzy.preferredPhysicalId,null);
+  assert.equal(fuzzy.candidates.length,1);
+  const differentVolume=physicalCandidatesForLegacy(legacy,[{...unlinked,volume:'1'}],'어린 왕자','문학동네','5');
+  assert.equal(differentVolume.preferredPhysicalId,null);
+  assert.equal(differentVolume.candidates.length,1);
 });
