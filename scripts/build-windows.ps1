@@ -21,8 +21,6 @@ $nodeSource = if ($env:ANGELA_NODE) { $env:ANGELA_NODE } else { (Get-Command nod
 Copy-Item -LiteralPath $nodeSource -Destination (Join-Path $bundle 'node.exe') -Force
 Get-ChildItem -LiteralPath $projectRoot -Filter '*.mjs' -File | Copy-Item -Destination $bundle -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'public') -Destination $bundle -Recurse -Force
-New-Item -ItemType Directory -Path (Join-Path $bundle 'scripts') -Force | Out-Null
-Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts\convert-xls.ps1') -Destination (Join-Path $bundle 'scripts') -Force
 New-Item -ItemType Directory -Path (Join-Path $bundle 'dist') -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $dist 'Angela-offline-android.apk') -Destination (Join-Path $bundle 'dist') -Force
 $archive = Join-Path $dist 'Angela-Windows-20260929.zip'

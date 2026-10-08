@@ -58,14 +58,21 @@ async function desktop(){
   click('#reset-catalog',resetCatalogDialog);
   $('#excel').onchange=run(async e=>{const f=e.target.files[0];if(!f)return;const result=await api('/api/excel',await f.arrayBuffer(),true);await desktop();notice(`${result.count}개의 장부 행을 원문과 함께 보존했습니다.`);});
   $('#result-excel').onchange=run(async e=>{const f=e.target.files[0];if(!f)return;const result=await api('/api/result-excel',await f.arrayBuffer(),true);await desktop();notice(`결과 Excel을 불러왔습니다. 실물 ${result.addedPhysical}권, 미확인 장부 ${result.addedLegacy}행 추가 · 기존 ${result.unchanged}행 유지 · 권 번호 ${result.filledVolumes}건 보완`);});
-  let bulkPreview=null;
+  let bulkPreview=null,bulkFileBytes=null;
+  $('#bulk-file').onchange=run(async e=>{
+    bulkPreview=null;bulkFileBytes=null;$('#bulk-preview-result').innerHTML='';
+    const file=e.target.files?.[0];if(!file)return;
+    if(file.size>10*1024*1024)throw Error('Excel 파일은 10MB 이하만 가져올 수 있습니다.');
+    try{bulkFileBytes=await file.arrayBuffer();}
+    catch{throw Error('선택한 파일을 읽을 수 없습니다. 파일을 PC의 로컬 폴더에 복사한 뒤 다시 선택하세요.');}
+    notice(file.name+' 파일을 읽었습니다. 행 범위를 입력한 뒤 미리 확인하세요.');
+  });
   click('#bulk-preview',async()=>{
-    const file=$('#bulk-file').files[0];
-    if(!file)throw Error('Excel 파일을 선택하세요.');
+    if(!bulkFileBytes)throw Error('읽을 수 있는 Excel 파일을 다시 선택하세요.');
     const start=$('#bulk-start').value,end=$('#bulk-end').value,sheet=$('#bulk-sheet').value.trim();
     if(!start||!end)throw Error('시작 행과 끝 행을 입력하세요.');
     const query=new URLSearchParams({start,end,sheet});
-    bulkPreview=await api('/api/physical/import-preview?'+query,await file.arrayBuffer(),true);
+    bulkPreview=await api('/api/physical/import-preview?'+query,bulkFileBytes,true);
     const rows=[...bulkPreview.first,...bulkPreview.last].filter((x,i,a)=>a.findIndex(y=>y.row===x.row)===i);
     $('#bulk-preview-result').innerHTML=`<div class="notice-inline"><strong>${esc(bulkPreview.sheet)} · ${bulkPreview.start}~${bulkPreview.end}행 · ${bulkPreview.count}권 추가 예정</strong><p>기존 실물은 수정하지 않습니다. 번호=실물번호, 날짜=입수일, 도서명, 출판사, 비고를 가져옵니다.</p>${rows.map(x=>`<div>${x.row}행 · ${esc(x.id)} · ${esc(x.title)} · ${esc(x.date)}</div>`).join('')}<button id="bulk-apply">확인한 ${bulkPreview.count}권 추가</button></div>`;
     click('#bulk-apply',async()=>{
@@ -73,7 +80,7 @@ async function desktop(){
       await desktop();notice(result.count+'권의 새 실물을 추가했습니다. 번호 '+result.firstId+' ~ '+result.lastId);
     });
   });
-  for(const selector of ['#bulk-file','#bulk-sheet','#bulk-start','#bulk-end'])$(selector).addEventListener('input',()=>{$('#bulk-preview-result').innerHTML='';bulkPreview=null;});
+  for(const selector of ['#bulk-sheet','#bulk-start','#bulk-end'])$(selector).addEventListener('input',()=>{$('#bulk-preview-result').innerHTML='';bulkPreview=null;});
   click('#create',async()=>{await api('/api/session',{worker:$('#worker').value,area:$('#area').value});await desktop();notice('조사용 데이터를 생성했습니다.');});
   click('#package',()=>download(latest,`survey-package-${latest.id}.json`));
   $('#json').onchange=run(async e=>{const files=[...e.target.files];if(!files.length)return;reportQueue=await Promise.all(files.map(async file=>({name:file.name,value:JSON.parse(await file.text())})));await showNextReport();});
@@ -91,12 +98,12 @@ async function showNextReport(){
   click('#inspect',inspect);click('#skip-report',async()=>{reportQueue.shift();await showNextReport();if(!reportQueue.length)$('#review').innerHTML='';});
 }
 function renderDesktopLists(){
-  const physical=search($('#pc-search').value,state.physicalBooks,100);
-  const books=$('#pc-search').value?physical:state.physicalBooks;
-  $('#physical-list').innerHTML=books.length?books.map(b=>`<div class="candidate"><strong>${esc(b.physicalId)}</strong> · ${esc(b.titleCanonical)}${b.volume?' · 권 번호: '+esc(b.volume):''} · ${esc(b.publisherCanonical)} <span class="tag ${b.status==='ACTIVE'?'ok':'warn'}">${esc(statusName(b.status))}</span><button class="secondary" data-edit-book>편집</button><div class="muted">장부 연결: ${esc(state.legacyRecords.find(x=>x.recordId===b.legacyRecordId)?.legacyLedgerId||'없음')} · 번호표: ${esc(b.labelStatus)} · 상태 이력 ${(state.statusHistory||[]).filter(x=>x.physicalId===b.physicalId).length}건 · 비고: ${esc(physicalNote(b)||'없음')}</div></div>`).join(''):'<p class="muted">등록된 실물이 없습니다.</p>';
+  const physicalQuery=$('#pc-search').value.trim(),legacyQuery=$('#legacy-search').value.trim();
+  const books=physicalQuery?search(physicalQuery,state.physicalBooks,100):[];
+  $('#physical-list').innerHTML=!physicalQuery?'<p class="muted">실물번호·제목·출판사를 검색하면 목록이 표시됩니다.</p>':books.length?books.map(b=>`<div class="candidate"><strong>${esc(b.physicalId)}</strong> · ${esc(b.titleCanonical)}${b.volume?' · 권 번호: '+esc(b.volume):''} · ${esc(b.publisherCanonical)} <span class="tag ${b.status==='ACTIVE'?'ok':'warn'}">${esc(statusName(b.status))}</span><button class="secondary" data-edit-book>편집</button><div class="muted">장부 연결: ${esc(state.legacyRecords.find(x=>x.recordId===b.legacyRecordId)?.legacyLedgerId||'없음')} · 번호표: ${esc(b.labelStatus)} · 상태 이력 ${(state.statusHistory||[]).filter(x=>x.physicalId===b.physicalId).length}건 · 비고: ${esc(physicalNote(b)||'없음')}</div></div>`).join(''):'<p class="muted">등록된 실물이 없습니다.</p>';
   document.querySelectorAll('[data-edit-book]').forEach(el=>el.onclick=()=>pcEditDialog(el.parentElement.querySelector('strong').textContent));
-  const legacy=$('#legacy-search').value?search($('#legacy-search').value,state.legacyRecords,100):state.legacyRecords;
-  $('#legacy-list').innerHTML=legacy.length?legacy.slice(0,100).map(x=>`<div class="candidate"><strong>${esc(x.legacyLedgerId)}</strong> · ${esc(x.titleCanonical)} · ${esc(x.publisherCanonical)}<div class="muted">${esc(x.sourceSheet)} ${x.sourceRow}행 · 원본 권수 ${esc(x.quantityRaw)} · 비고 ${esc(x.noteRaw||'없음')}</div><button type="button" class="secondary" data-legacy-note="${esc(x.recordId)}">비고 수정</button></div>`).join(''):'<p class="muted">원장 항목이 없습니다.</p>';
+  const legacy=legacyQuery?search(legacyQuery,state.legacyRecords,100):[];
+  $('#legacy-list').innerHTML=!legacyQuery?'<p class="muted">장부번호·제목·출판사를 검색하면 목록이 표시됩니다.</p>':legacy.length?legacy.map(x=>`<div class="candidate"><strong>${esc(x.legacyLedgerId)}</strong> · ${esc(x.titleCanonical)} · ${esc(x.publisherCanonical)}<div class="muted">${esc(x.sourceSheet)} ${x.sourceRow}행 · 원본 권수 ${esc(x.quantityRaw)} · 비고 ${esc(x.noteRaw||'없음')}</div><button type="button" class="secondary" data-legacy-note="${esc(x.recordId)}">비고 수정</button></div>`).join(''):'<p class="muted">원장 항목이 없습니다.</p>';
   document.querySelectorAll('[data-legacy-note]').forEach(el=>el.onclick=()=>pcLegacyNoteDialog(el.dataset.legacyNote));
 }
 function pcLegacyNoteDialog(recordId){
